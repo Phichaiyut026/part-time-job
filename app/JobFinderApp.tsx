@@ -27,6 +27,9 @@ type Job = {
   interests: string[];
   applyUrl: string;
   status: Status;
+  location?: string;
+  country?: string;
+  source?: "mock" | "openwebninja";
 };
 
 type StudentProfile = {
@@ -43,12 +46,17 @@ type MatchResult = {
   job: Job;
   score: number;
   reasons: string[];
+  warnings: string[];
+  scheduleSafe: boolean;
+  isRelaxed: boolean;
   skillScore: number;
   timeScore: number;
   wageScore: number;
   distanceScore: number;
   weeklyHours: number;
 };
+
+type JobSource = "mock" | "live" | "empty-live" | "fallback";
 
 const days: Day[] = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const skillOptions = ["English", "Excel", "Sales", "Teaching", "Design", "Coding"];
@@ -139,11 +147,27 @@ function scoreJob(job: Job, profile: StudentProfile): MatchResult {
     job.distance === 0 ? "ทำงานออนไลน์ ไม่มีระยะทางเดินทาง" : `อยู่ห่าง ${job.distance} กม.`,
   ];
 
-  return { job, score, reasons, skillScore, timeScore, wageScore, distanceScore, weeklyHours: hours };
+  return {
+    job,
+    score,
+    reasons,
+    warnings: [],
+    scheduleSafe: true,
+    isRelaxed: false,
+    skillScore,
+    timeScore,
+    wageScore,
+    distanceScore,
+    weeklyHours: hours,
+  };
 }
 
 function filterAndScore(profile: StudentProfile, schedule: ScheduleBlock[]) {
-  return mockJobs
+  return filterAndScoreJobs(mockJobs, profile, schedule);
+}
+
+function filterAndScoreJobs(jobs: Job[], profile: StudentProfile, schedule: ScheduleBlock[]) {
+  return jobs
     .filter((job) => job.status !== "suspicious")
     .filter((job) => !hasClassConflict(job, schedule))
     .filter((job) => job.wage >= profile.minWage)
@@ -151,6 +175,37 @@ function filterAndScore(profile: StudentProfile, schedule: ScheduleBlock[]) {
     .filter((job) => weeklyHours(job) <= profile.maxHours)
     .map((job) => scoreJob(job, profile))
     .sort((a, b) => b.score - a.score);
+}
+
+function scoreApproximateJobs(jobs: Job[], profile: StudentProfile, schedule: ScheduleBlock[]) {
+  return jobs
+    .filter((job) => job.status !== "suspicious")
+    .map((job) => {
+      const result = scoreJob(job, profile);
+      const hours = weeklyHours(job);
+      const warnings = [];
+      const scheduleSafe = !hasClassConflict(job, schedule);
+
+      if (!scheduleSafe) warnings.push("เวลางานอาจชนกับตารางเรียน");
+      if (job.wage < profile.minWage) warnings.push(`ค่าจ้างต่ำกว่าเป้า ${profile.minWage} บาท/ชม.`);
+      if (job.distance > profile.maxDistance) warnings.push(`ระยะทางเกินเป้า ${profile.maxDistance} กม.`);
+      if (hours > profile.maxHours) warnings.push(`ชั่วโมงต่อสัปดาห์เกินเป้า ${profile.maxHours} ชม.`);
+
+      const penalty = warnings.length * 8 + (scheduleSafe ? 0 : 12);
+      return {
+        ...result,
+        score: Math.max(1, result.score - penalty),
+        warnings,
+        scheduleSafe,
+        isRelaxed: warnings.length > 0,
+        reasons: [
+          scheduleSafe ? "ไม่ชนกับตารางเรียน" : "เป็นงานใกล้เคียง แต่ต้องตรวจเวลาซ้ำ",
+          ...result.reasons.slice(1),
+        ],
+      };
+    })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 8);
 }
 
 function getSuggestions(profile: StudentProfile, schedule: ScheduleBlock[]) {
@@ -209,8 +264,15 @@ function TogglePill({ label, active, onClick }: { label: string; active: boolean
 export function JobFinderApp() {
   const [profile, setProfile] = useState<StudentProfile>(initialProfile);
   const [schedule, setSchedule] = useState<ScheduleBlock[]>(defaultSchedule);
+  const [jobQuery, setJobQuery] = useState("part time student jobs");
+  const [jobLocation, setJobLocation] = useState("Bangkok, Thailand");
+  const [jobSource, setJobSource] = useState<JobSource>("mock");
+  const [sourceMessage, setSourceMessage] = useState("ยังไม่ได้ค้นหา ระบบพร้อมใช้ mock data สำหรับ MVP");
+  const [liveJobCount, setLiveJobCount] = useState(0);
   const [hasSearched, setHasSearched] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
+  const [isExplaining, setIsExplaining] = useState(false);
+  const [aiExplanation, setAiExplanation] = useState("");
   const [results, setResults] = useState<MatchResult[]>([]);
   const suspiciousCount = useMemo(() => mockJobs.filter((job) => job.status === "suspicious").length, []);
 
@@ -228,16 +290,97 @@ export function JobFinderApp() {
     setSchedule((blocks) => blocks.map((block) => (block.id === id ? { ...block, [field]: value } : block)));
   };
 
-  const runSearch = () => {
-    setHasSearched(true);
-    setIsSearching(true);
-    window.setTimeout(() => {
-      setResults(filterAndScore(profile, schedule));
-      setIsSearching(false);
-    }, 500);
+  const explainResults = (nextResults: MatchResult[]) => {
+    setIsExplaining(true);
+
+    fetch("/api/explain", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        profile,
+        schedule,
+        suggestions: getSuggestions(profile, schedule),
+          results: nextResults.map((result) => ({
+            title: result.job.title,
+            company: result.job.company,
+            score: result.score,
+            wage: result.job.wage,
+            distance: result.job.distance,
+            weeklyHours: result.weeklyHours,
+            scheduleSafe: result.scheduleSafe,
+            isRelaxed: result.isRelaxed,
+            reasons: result.reasons,
+            warnings: result.warnings,
+          })),
+      }),
+    })
+      .then((response) => (response.ok ? response.json() : Promise.reject(response)))
+      .then((data: { explanation?: string }) => {
+        setAiExplanation(data.explanation?.trim() ?? "");
+      })
+      .catch(() => {
+        setAiExplanation("");
+      })
+      .finally(() => {
+        setIsExplaining(false);
+      });
   };
 
-  const explanation = agentExplanation(profile, schedule, results);
+  const runSearch = async () => {
+    setHasSearched(true);
+    setIsSearching(true);
+    setIsExplaining(false);
+    setAiExplanation("");
+    setLiveJobCount(0);
+    setSourceMessage("กำลังเรียก OpenWebNinja Job Search API...");
+
+    try {
+      const response = await fetch(
+        `/api/jobs?query=${encodeURIComponent(jobQuery)}&location=${encodeURIComponent(jobLocation)}`,
+      );
+      const data = (await response.json()) as { jobs?: Job[]; error?: string };
+      if (!response.ok) {
+        throw new Error(data.error || "Job API unavailable");
+      }
+      const liveJobs = Array.isArray(data.jobs) ? data.jobs : [];
+      setLiveJobCount(liveJobs.length);
+
+      if (!liveJobs.length) {
+        setResults([]);
+        setJobSource("empty-live");
+        setSourceMessage("เรียก OpenWebNinja สำเร็จ แต่ API ไม่ส่งรายการงานที่แปลงเป็น card ได้ในครั้งนี้");
+        setIsSearching(false);
+        explainResults([]);
+        return;
+      }
+
+      const nextResults = filterAndScoreJobs(liveJobs, profile, schedule);
+      const displayResults = nextResults.length
+        ? nextResults
+        : scoreApproximateJobs(liveJobs, profile, schedule);
+      setResults(displayResults);
+      setJobSource("live");
+      setSourceMessage(
+        nextResults.length
+          ? `ใช้ Live API จาก OpenWebNinja ในพื้นที่ ${jobLocation}: ได้งานมา ${liveJobs.length} รายการ แล้วผ่านเงื่อนไข ${nextResults.length} รายการ`
+          : `ใช้ Live API จาก OpenWebNinja ในพื้นที่ ${jobLocation}: ได้งานมา ${liveJobs.length} รายการ แต่ไม่มีงานที่ผ่านทุกเงื่อนไข จึงแสดงงานใกล้เคียง ${displayResults.length} รายการ`,
+      );
+      setIsSearching(false);
+      explainResults(displayResults);
+    } catch (error) {
+      const nextResults = filterAndScore(profile, schedule);
+      setResults(nextResults);
+      setJobSource("fallback");
+      setSourceMessage(
+        `เรียก OpenWebNinja ไม่สำเร็จ (${error instanceof Error ? error.message : "unknown error"}) จึงใช้ mock data fallback เพื่อให้ MVP ยังทดสอบได้`,
+      );
+      setIsSearching(false);
+      explainResults(nextResults);
+    }
+  };
+
+  const fallbackExplanation = agentExplanation(profile, schedule, results);
+  const explanation = aiExplanation || fallbackExplanation;
   const suggestions = getSuggestions(profile, schedule);
 
   return (
@@ -253,7 +396,7 @@ export function JobFinderApp() {
           </div>
           <div className="grid grid-cols-3 gap-2 text-center">
             <StatCard value={mockJobs.length} label="Mock jobs" color="teal" />
-            <StatCard value={suspiciousCount} label="Blocked" color="amber" />
+            <StatCard value={liveJobCount || suspiciousCount} label={liveJobCount ? "Live jobs" : "Blocked"} color="amber" />
             <StatCard value={results.length} label="Matches" color="sky" />
           </div>
         </header>
@@ -271,6 +414,8 @@ export function JobFinderApp() {
 
                 <OptionGroup title="ทักษะ" options={skillOptions} selected={profile.skills} onToggle={(skill) => updateArray("skills", skill)} />
                 <OptionGroup title="ความสนใจ" options={interestOptions} selected={profile.interests} onToggle={(interest) => updateArray("interests", interest)} />
+                <TextInput label="คำค้นหางานจาก API" value={jobQuery} onChange={setJobQuery} />
+                <TextInput label="พื้นที่ค้นหา" value={jobLocation} onChange={setJobLocation} />
 
                 <div className="grid gap-3 sm:grid-cols-3">
                   <NumberInput label="บาท/ชม. ขั้นต่ำ" value={profile.minWage} min={0} onChange={(value) => setProfile({ ...profile, minWage: value })} />
@@ -323,8 +468,23 @@ export function JobFinderApp() {
                 </div>
                 <span className="w-fit rounded-full bg-emerald-50 px-3 py-1 text-xs font-black text-emerald-700">deterministic schedule check</span>
               </div>
+              <div className={`mt-4 rounded-xl px-4 py-3 text-sm font-bold ${
+                jobSource === "live"
+                  ? "bg-emerald-50 text-emerald-800"
+                  : jobSource === "empty-live"
+                    ? "bg-sky-50 text-sky-800"
+                  : jobSource === "fallback"
+                    ? "bg-amber-50 text-amber-900"
+                    : "bg-slate-50 text-slate-600"
+              }`}>
+                {sourceMessage}
+              </div>
               <p className="mt-4 rounded-xl bg-slate-50 p-4 text-sm leading-6 text-slate-700">
-                {!hasSearched ? "กรอกข้อมูลแล้วกดค้นหา ระบบจะตัดงาน suspicious ตรวจเวลาชนเรียนด้วย logic และจัดอันดับงานที่เหมาะที่สุดให้" : explanation}
+                {!hasSearched
+                  ? "กรอกข้อมูลแล้วกดค้นหา ระบบจะตัดงาน suspicious ตรวจเวลาชนเรียนด้วย logic และจัดอันดับงานที่เหมาะที่สุดให้"
+                  : isExplaining
+                    ? "ระบบคำนวณผลลัพธ์เสร็จแล้ว กำลังให้ Gemini ช่วยเรียบเรียงคำอธิบาย..."
+                    : explanation}
               </p>
             </section>
 
@@ -334,7 +494,11 @@ export function JobFinderApp() {
                   <h2 className="text-lg font-black text-slate-950">งานที่แนะนำ</h2>
                   <p className="text-sm text-slate-500">เรียงจากคะแนนความเหมาะสมสูงสุด</p>
                 </div>
-                {hasSearched && !isSearching ? <div className="text-sm font-bold text-slate-600">{results.length} งานผ่านทุกเงื่อนไข</div> : null}
+                {hasSearched && !isSearching ? (
+                  <div className="text-sm font-bold text-slate-600">
+                    {results.some((result) => result.isRelaxed) ? `${results.length} งานใกล้เคียง` : `${results.length} งานผ่านทุกเงื่อนไข`}
+                  </div>
+                ) : null}
               </div>
 
               {!hasSearched ? (
@@ -342,7 +506,7 @@ export function JobFinderApp() {
               ) : isSearching ? (
                 <LoadingState />
               ) : results.length === 0 ? (
-                <NoResults suggestions={suggestions} />
+                <NoResults suggestions={suggestions} message={sourceMessage} />
               ) : (
                 <div className="grid gap-4">
                   {results.map((result) => <JobCard key={result.job.id} result={result} />)}
@@ -424,12 +588,12 @@ function LoadingState() {
   );
 }
 
-function NoResults({ suggestions }: { suggestions: string[] }) {
+function NoResults({ suggestions, message }: { suggestions: string[]; message: string }) {
   return (
     <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5">
       <h3 className="text-lg font-black text-amber-950">ยังไม่พบงานที่ตรงทั้งหมด</h3>
       <p className="mt-2 text-sm leading-6 text-amber-900">
-        ระบบตัดงาน suspicious ออกแล้ว และไม่พบงานที่ผ่านเวลาเรียน ค่าจ้าง ระยะทาง และชั่วโมงทั้งหมดพร้อมกัน
+        {message}
       </p>
       <div className="mt-4 grid gap-2">
         {(suggestions.length ? suggestions : ["ลองลดเงื่อนไขค่าจ้าง ระยะทาง หรือชั่วโมงต่อสัปดาห์"]).map((suggestion) => (
@@ -446,7 +610,14 @@ function JobCard({ result }: { result: MatchResult }) {
       <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="rounded-full bg-teal-50 px-3 py-1 text-xs font-black text-teal-700">ไม่ชนตารางเรียน</span>
+            <span className={`rounded-full px-3 py-1 text-xs font-black ${
+              result.scheduleSafe ? "bg-teal-50 text-teal-700" : "bg-amber-50 text-amber-800"
+            }`}>
+              {result.scheduleSafe ? "ไม่ชนตารางเรียน" : "ต้องเช็กเวลา"}
+            </span>
+            {result.isRelaxed ? (
+              <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-black text-amber-800">งานใกล้เคียง</span>
+            ) : null}
             <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600">{result.job.category}</span>
           </div>
           <h3 className="mt-3 text-xl font-black text-slate-950">{result.job.title}</h3>
@@ -461,14 +632,14 @@ function JobCard({ result }: { result: MatchResult }) {
       <div className="mt-4 grid gap-3 md:grid-cols-3">
         <InfoBlock label="เวลา" value={formatShifts(result.job.shifts)} />
         <InfoBlock label="ค่าจ้าง" value={`${result.job.wage} บาท/ชม.`} strong />
-        <InfoBlock label="ระยะทาง" value={result.job.distance === 0 ? "Online" : `${result.job.distance} กม.`} strong />
+        <InfoBlock label="พื้นที่/ระยะทาง" value={`${result.job.location ? `${result.job.location} · ` : ""}${result.job.distance === 0 ? "Online" : `${result.job.distance} กม.`}`} strong />
       </div>
 
       <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_auto] lg:items-end">
         <div>
           <div className="text-sm font-black text-slate-800">เหตุผลที่เหมาะ</div>
           <ul className="mt-2 grid gap-1 text-sm leading-6 text-slate-600">
-            {result.reasons.slice(0, 4).map((reason) => <li key={reason}>• {reason}</li>)}
+            {[...result.reasons.slice(0, 4), ...result.warnings].map((reason) => <li key={reason}>• {reason}</li>)}
           </ul>
           <div className="mt-3 flex flex-wrap gap-2 text-xs font-bold">
             <span className="rounded-full bg-sky-50 px-2.5 py-1 text-sky-700">Skills {result.skillScore}/35</span>
