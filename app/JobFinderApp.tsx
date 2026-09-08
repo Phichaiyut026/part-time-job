@@ -162,79 +162,73 @@ function scoreJob(job: Job, profile: StudentProfile): MatchResult {
   };
 }
 
-function filterAndScore(profile: StudentProfile, schedule: ScheduleBlock[]) {
-  return filterAndScoreJobs(mockJobs, profile, schedule);
+function filterAndScore(profile: StudentProfile, schedule: ScheduleBlock[], query = "") {
+  return filterAndScoreJobs(findJobsByQuery(mockJobs, query), profile, schedule);
 }
 
 function filterAndScoreJobs(jobs: Job[], profile: StudentProfile, schedule: ScheduleBlock[]) {
   return jobs
     .filter((job) => job.status !== "suspicious")
-    .filter((job) => !hasClassConflict(job, schedule))
-    .filter((job) => job.wage >= profile.minWage)
-    .filter((job) => job.distance <= profile.maxDistance)
-    .filter((job) => weeklyHours(job) <= profile.maxHours)
-    .map((job) => scoreJob(job, profile))
+    .map((job) => scoreJobWithWarnings(job, profile, schedule))
     .sort((a, b) => b.score - a.score);
 }
 
-function scoreApproximateJobs(jobs: Job[], profile: StudentProfile, schedule: ScheduleBlock[]) {
-  return jobs
-    .filter((job) => job.status !== "suspicious")
-    .map((job) => {
-      const result = scoreJob(job, profile);
-      const hours = weeklyHours(job);
-      const warnings = [];
-      const scheduleSafe = !hasClassConflict(job, schedule);
+function findJobsByQuery(jobs: Job[], query: string) {
+  const normalizedTerms = query
+    .toLowerCase()
+    .split(/\s+/)
+    .map((term) => term.trim())
+    .filter((term) => term.length > 2 && !["part", "time", "jobs", "job", "student"].includes(term));
 
-      if (!scheduleSafe) warnings.push("เวลางานอาจชนกับตารางเรียน");
-      if (job.wage < profile.minWage) warnings.push(`ค่าจ้างต่ำกว่าเป้า ${profile.minWage} บาท/ชม.`);
-      if (job.distance > profile.maxDistance) warnings.push(`ระยะทางเกินเป้า ${profile.maxDistance} กม.`);
-      if (hours > profile.maxHours) warnings.push(`ชั่วโมงต่อสัปดาห์เกินเป้า ${profile.maxHours} ชม.`);
+  if (!normalizedTerms.length) return jobs;
 
-      const penalty = warnings.length * 8 + (scheduleSafe ? 0 : 12);
-      return {
-        ...result,
-        score: Math.max(1, result.score - penalty),
-        warnings,
-        scheduleSafe,
-        isRelaxed: warnings.length > 0,
-        reasons: [
-          scheduleSafe ? "ไม่ชนกับตารางเรียน" : "เป็นงานใกล้เคียง แต่ต้องตรวจเวลาซ้ำ",
-          ...result.reasons.slice(1),
-        ],
-      };
-    })
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 8);
+  const matched = jobs.filter((job) => {
+    const searchable = `${job.title} ${job.company} ${job.category} ${job.skills.join(" ")} ${job.interests.join(" ")}`.toLowerCase();
+    return normalizedTerms.some((term) => searchable.includes(term));
+  });
+
+  return matched.length ? matched : jobs;
 }
 
-function getSuggestions(profile: StudentProfile, schedule: ScheduleBlock[]) {
-  const verified = mockJobs.filter((job) => job.status !== "suspicious");
+function scoreJobWithWarnings(job: Job, profile: StudentProfile, schedule: ScheduleBlock[]) {
+  const result = scoreJob(job, profile);
+  const hours = weeklyHours(job);
+  const warnings = [];
+  const scheduleSafe = !hasClassConflict(job, schedule);
+
+  if (!scheduleSafe) warnings.push("เวลางานอาจชนกับตารางเรียน");
+  if (job.wage < profile.minWage) warnings.push(`ค่าจ้างต่ำกว่าเป้า ${profile.minWage} บาท/ชม.`);
+  if (job.distance > profile.maxDistance) warnings.push(`ระยะทางเกินเป้า ${profile.maxDistance} กม.`);
+  if (hours > profile.maxHours) warnings.push(`ชั่วโมงต่อสัปดาห์เกินเป้า ${profile.maxHours} ชม.`);
+
+  const penalty = warnings.length * 8 + (scheduleSafe ? 0 : 12);
+  return {
+    ...result,
+    score: Math.max(1, result.score - penalty),
+    warnings,
+    scheduleSafe,
+    isRelaxed: warnings.length > 0,
+    reasons: [
+      scheduleSafe ? "ไม่ชนกับตารางเรียน" : "ตำแหน่งงานตรงกับที่ค้นหา แต่ต้องตรวจเวลาซ้ำ",
+      ...result.reasons.slice(1),
+    ],
+  };
+}
+
+function getSuggestions(query: string, location: string) {
   const suggestions = [];
-  if (verified.some((job) => hasClassConflict(job, schedule))) {
-    suggestions.push("เพิ่มช่วงเวลาว่างตอนเย็นหรือเสาร์-อาทิตย์ หากตารางเรียนยืดหยุ่นได้");
-  }
-  if (verified.filter((job) => job.wage >= profile.minWage).length < 6) {
-    suggestions.push("ลดค่าจ้างขั้นต่ำเล็กน้อยเพื่อเปิดตัวเลือกงานมากขึ้น");
-  }
-  if (verified.filter((job) => job.distance <= profile.maxDistance).length < 6) {
-    suggestions.push("เพิ่มระยะทางสูงสุด หรือเลือกงาน Online เพิ่ม");
-  }
-  if (verified.filter((job) => weeklyHours(job) <= profile.maxHours).length < 6) {
-    suggestions.push("เพิ่มจำนวนชั่วโมงสูงสุดต่อสัปดาห์อีก 2-4 ชั่วโมง");
-  }
-  if (profile.skills.length === 0 || profile.interests.length === 0) {
-    suggestions.push("เลือกทักษะและความสนใจเพิ่ม เพื่อให้ระบบจับคู่งานได้แม่นขึ้น");
-  }
+  suggestions.push(`ค้นหาตำแหน่ง "${query || "part time student jobs"}" ในพื้นที่ ${location || "Thailand"} ก่อน แล้วค่อยดูเงื่อนไขประกอบ`);
+  suggestions.push("ลองใช้ชื่อภาษาไทยและอังกฤษของตำแหน่งเดียวกัน เช่น Barista / พนักงานร้านกาแฟ");
+  suggestions.push("ใส่พื้นที่ให้ชัดขึ้น เช่น Bangkok, Chiang Mai หรือชื่อเขตที่ต้องการ");
   return suggestions.slice(0, 3);
 }
 
-function agentExplanation(profile: StudentProfile, schedule: ScheduleBlock[], results: MatchResult[]) {
+function agentExplanation(profile: StudentProfile, schedule: ScheduleBlock[], results: MatchResult[], query: string, location: string) {
   if (!results.length) {
-    const suggestions = getSuggestions(profile, schedule);
+    const suggestions = getSuggestions(query, location);
     return suggestions.length
-      ? `ระบบตัดงานที่น่าสงสัยออกก่อน แล้วตรวจเวลาเรียนแบบช่วงเวลาชนกัน ผลลัพธ์ยังไม่มีงานที่ผ่านทุกเงื่อนไข คำแนะนำหลักคือ ${suggestions.join(" และ ")}`
-      : "ระบบยังไม่พบงานที่ผ่านทุกเงื่อนไขหลังตัดงานเสี่ยงและตรวจตารางเรียน";
+      ? `ระบบยังไม่เจอตำแหน่งงานจากคำค้นนี้โดยตรง ควรลองค้นด้วยชื่อเรียกอื่นของตำแหน่งเดิมก่อน เช่น ${suggestions.join(" และ ")}`
+      : "ระบบยังไม่เจอตำแหน่งงานจากคำค้นนี้โดยตรง";
   }
 
   const freeDays = days.filter((day) => !schedule.some((block) => block.day === day));
@@ -242,7 +236,7 @@ function agentExplanation(profile: StudentProfile, schedule: ScheduleBlock[], re
   const freeText = freeDays.length
     ? `คุณไม่มีเวลาเรียนที่กรอกไว้ในวัน ${freeDays.slice(0, 3).join(", ")}`
     : "คุณมีตารางเรียนกระจายหลายวัน ระบบจึงเลือกงานที่ไม่ทับช่วงเรียนโดยตรง";
-  return `${freeText} งานที่แนะนำมากที่สุดคือ ${top.job.title} ที่ ${top.job.company} เพราะไม่ชนเรียน ได้ ${top.score}/100 คะแนน ${top.reasons[1]} ค่าจ้าง ${top.job.wage} บาท/ชม. และระยะทาง ${top.job.distance} กม.`;
+  return `${freeText} งานที่ตรงกับการค้นหาและน่าสนใจที่สุดคือ ${top.job.title} ที่ ${top.job.company} ได้ ${top.score}/100 คะแนน ${top.reasons[1]} ค่าจ้าง ${top.job.wage} บาท/ชม. และระยะทาง ${top.job.distance} กม.`;
 }
 
 function TogglePill({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
@@ -273,6 +267,7 @@ export function JobFinderApp() {
   const [isSearching, setIsSearching] = useState(false);
   const [isExplaining, setIsExplaining] = useState(false);
   const [aiExplanation, setAiExplanation] = useState("");
+  const [searchPlanMessage, setSearchPlanMessage] = useState("");
   const [results, setResults] = useState<MatchResult[]>([]);
   const suspiciousCount = useMemo(() => mockJobs.filter((job) => job.status === "suspicious").length, []);
 
@@ -299,7 +294,7 @@ export function JobFinderApp() {
       body: JSON.stringify({
         profile,
         schedule,
-        suggestions: getSuggestions(profile, schedule),
+        suggestions: getSuggestions(jobQuery, jobLocation),
           results: nextResults.map((result) => ({
             title: result.job.title,
             company: result.job.company,
@@ -327,22 +322,25 @@ export function JobFinderApp() {
   };
 
   const runSearch = async () => {
+    if (isSearching || isExplaining) return;
     setHasSearched(true);
     setIsSearching(true);
     setIsExplaining(false);
     setAiExplanation("");
     setLiveJobCount(0);
-    setSourceMessage("กำลังเรียก OpenWebNinja Job Search API...");
+    setSearchPlanMessage("");
+    setSourceMessage("กำลังเตรียมคำค้นด้วย AI และค้นหาตำแหน่งงาน อาจลองคำค้นไทย/อังกฤษเพิ่มเติมเมื่อไม่พบงาน...");
 
     try {
       const response = await fetch(
         `/api/jobs?query=${encodeURIComponent(jobQuery)}&location=${encodeURIComponent(jobLocation)}`,
       );
-      const data = (await response.json()) as { jobs?: Job[]; error?: string };
+      const data = (await response.json()) as { jobs?: Job[]; error?: string; searchPlan?: { message: string; searchedQueries: string[] } };
       if (!response.ok) {
         throw new Error(data.error || "Job API unavailable");
       }
       const liveJobs = Array.isArray(data.jobs) ? data.jobs : [];
+      if (data.searchPlan) setSearchPlanMessage(`${data.searchPlan.message} • คำที่ค้น: ${data.searchPlan.searchedQueries.join(" → ")}`);
       setLiveJobCount(liveJobs.length);
 
       if (!liveJobs.length) {
@@ -354,55 +352,50 @@ export function JobFinderApp() {
         return;
       }
 
-      const nextResults = filterAndScoreJobs(liveJobs, profile, schedule);
-      const displayResults = nextResults.length
-        ? nextResults
-        : scoreApproximateJobs(liveJobs, profile, schedule);
+      const displayResults = filterAndScoreJobs(liveJobs, profile, schedule);
       setResults(displayResults);
       setJobSource("live");
       setSourceMessage(
-        nextResults.length
-          ? `ใช้ Live API จาก OpenWebNinja ในพื้นที่ ${jobLocation}: ได้งานมา ${liveJobs.length} รายการ แล้วผ่านเงื่อนไข ${nextResults.length} รายการ`
-          : `ใช้ Live API จาก OpenWebNinja ในพื้นที่ ${jobLocation}: ได้งานมา ${liveJobs.length} รายการ แต่ไม่มีงานที่ผ่านทุกเงื่อนไข จึงแสดงงานใกล้เคียง ${displayResults.length} รายการ`,
+        `ใช้ Live API จาก OpenWebNinja ในพื้นที่ ${jobLocation}: เจอตำแหน่งงาน ${liveJobs.length} รายการ แล้วจัดอันดับตามความเหมาะสม ${displayResults.length} รายการ`,
       );
       setIsSearching(false);
       explainResults(displayResults);
     } catch (error) {
-      const nextResults = filterAndScore(profile, schedule);
+      const nextResults = filterAndScore(profile, schedule, jobQuery);
       setResults(nextResults);
       setJobSource("fallback");
       setSourceMessage(
-        `เรียก OpenWebNinja ไม่สำเร็จ (${error instanceof Error ? error.message : "unknown error"}) จึงใช้ mock data fallback เพื่อให้ MVP ยังทดสอบได้`,
+        `เรียก OpenWebNinja ไม่สำเร็จ (${error instanceof Error ? error.message : "unknown error"}) จึงค้นจาก mock data ตามตำแหน่งงานที่กรอกไว้ก่อน`,
       );
       setIsSearching(false);
       explainResults(nextResults);
     }
   };
 
-  const fallbackExplanation = agentExplanation(profile, schedule, results);
+  const fallbackExplanation = agentExplanation(profile, schedule, results, jobQuery, jobLocation);
   const explanation = aiExplanation || fallbackExplanation;
-  const suggestions = getSuggestions(profile, schedule);
+  const suggestions = getSuggestions(jobQuery, jobLocation);
 
   return (
-    <main className="min-h-screen bg-[#f7fbfa] text-slate-900">
-      <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-5 sm:px-6 lg:px-8">
-        <header className="flex flex-col gap-4 rounded-2xl border border-teal-100 bg-white px-5 py-5 shadow-sm md:flex-row md:items-center md:justify-between">
+    <main className="h-dvh overflow-hidden bg-[#f7fbfa] text-slate-900">
+      <div className="flex h-full w-full flex-col gap-4 px-4 py-4 sm:px-6 lg:gap-6 lg:px-8 lg:py-5">
+        <header className="z-10 flex shrink-0 flex-col gap-3 rounded-2xl border border-teal-100 bg-white px-5 py-3 shadow-sm md:flex-row md:items-center md:justify-between lg:py-5">
           <div>
             <p className="text-sm font-semibold uppercase tracking-wide text-teal-700">Student work planner</p>
-            <h1 className="mt-1 text-3xl font-black tracking-normal text-slate-950 sm:text-4xl">Part-time Job Finder</h1>
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
+            <h1 className="mt-1 text-2xl font-black tracking-normal text-slate-950 sm:text-4xl">Part-time Job Finder</h1>
+            <p className="mt-2 hidden max-w-2xl text-sm leading-6 text-slate-600 md:block">
               หาและจัดอันดับงานพาร์ทไทม์ที่ไม่ชนตารางเรียน พร้อมกรองงานเสี่ยง scam ออกก่อนแนะนำ
             </p>
           </div>
-          <div className="grid grid-cols-3 gap-2 text-center">
+          <div className="hidden shrink-0 grid-cols-3 gap-2 text-center sm:grid">
             <StatCard value={mockJobs.length} label="Mock jobs" color="teal" />
             <StatCard value={liveJobCount || suspiciousCount} label={liveJobCount ? "Live jobs" : "Blocked"} color="amber" />
             <StatCard value={results.length} label="Matches" color="sky" />
           </div>
         </header>
 
-        <section className="grid gap-6 lg:grid-cols-[420px_1fr]">
-          <div className="space-y-6">
+        <section className="app-scrollbar grid min-h-0 flex-1 gap-6 overflow-y-auto overscroll-contain lg:grid-cols-[minmax(0,380px)_minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)] lg:overflow-hidden xl:grid-cols-[420px_minmax(0,1fr)]">
+          <aside aria-label="ข้อมูลและเงื่อนไขค้นหางาน" className="app-scrollbar min-w-0 space-y-6 lg:min-h-0 lg:overflow-y-auto lg:overscroll-contain lg:[scrollbar-gutter:stable]">
             <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
               <div className="mb-4">
                 <h2 className="text-lg font-black text-slate-950">ข้อมูลนักศึกษา</h2>
@@ -453,18 +446,20 @@ export function JobFinderApp() {
                 ))}
               </div>
 
-              <button type="button" onClick={runSearch} className="mt-5 w-full rounded-xl bg-teal-600 px-4 py-3 text-base font-black text-white shadow-sm transition hover:bg-teal-700 focus:outline-none focus:ring-4 focus:ring-teal-200">
-                ค้นหางานที่เหมาะกับฉัน
+              <button type="button" onClick={runSearch} disabled={isSearching || isExplaining} className="mt-5 w-full rounded-xl bg-teal-600 px-4 py-3 text-base font-black text-white shadow-sm transition hover:bg-teal-700 focus:outline-none focus:ring-4 focus:ring-teal-200 disabled:cursor-wait disabled:opacity-60">
+                {isSearching ? "กำลังค้นหางาน..." : isExplaining ? "กำลังสรุปผล..." : "ค้นหางานด้วย AI"}
               </button>
             </section>
-          </div>
+          </aside>
 
-          <div className="space-y-6">
+          {/* Keyboard users need to focus this independently scrolling region. */}
+          {/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex */}
+          <div role="region" aria-label="ผลการค้นหางาน" tabIndex={0} className="app-scrollbar min-w-0 space-y-6 rounded-2xl focus-visible:outline-2 focus-visible:outline-teal-600 lg:min-h-0 lg:overflow-y-auto lg:overscroll-contain lg:[scrollbar-gutter:stable]">
             <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
               <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                 <div>
-                  <h2 className="text-lg font-black text-slate-950">AI Agent Explanation</h2>
-                  <p className="text-sm text-slate-500">ข้อความนี้สรุปจากผลลัพธ์ของ rules และ scoring ใน code</p>
+                  <h2 className="text-lg font-black text-slate-950">ผู้ช่วย AI ค้นหางาน</h2>
+                  <p className="text-sm text-slate-500">ช่วยเลือกคำค้นตำแหน่งงานและสรุปผลที่พบ</p>
                 </div>
                 <span className="w-fit rounded-full bg-emerald-50 px-3 py-1 text-xs font-black text-emerald-700">deterministic schedule check</span>
               </div>
@@ -479,6 +474,7 @@ export function JobFinderApp() {
               }`}>
                 {sourceMessage}
               </div>
+              {searchPlanMessage && <p className="mt-3 break-words text-sm leading-6 text-teal-800" role="status">{searchPlanMessage}</p>}
               <p className="mt-4 rounded-xl bg-slate-50 p-4 text-sm leading-6 text-slate-700">
                 {!hasSearched
                   ? "กรอกข้อมูลแล้วกดค้นหา ระบบจะตัดงาน suspicious ตรวจเวลาชนเรียนด้วย logic และจัดอันดับงานที่เหมาะที่สุดให้"
@@ -496,7 +492,7 @@ export function JobFinderApp() {
                 </div>
                 {hasSearched && !isSearching ? (
                   <div className="text-sm font-bold text-slate-600">
-                    {results.some((result) => result.isRelaxed) ? `${results.length} งานใกล้เคียง` : `${results.length} งานผ่านทุกเงื่อนไข`}
+                    {results.some((result) => result.isRelaxed) ? `${results.length} งานพร้อมข้อควรเช็ก` : `${results.length} งานที่เหมาะมาก`}
                   </div>
                 ) : null}
               </div>
@@ -545,9 +541,9 @@ function TextInput({ label, value, onChange }: { label: string; value: string; o
 
 function NumberInput({ label, value, min, step, onChange }: { label: string; value: number; min: number; step?: number; onChange: (value: number) => void }) {
   return (
-    <label className="grid gap-1 text-sm font-semibold text-slate-700">
+    <label className="grid min-w-0 gap-1 text-sm font-semibold text-slate-700">
       {label}
-      <input type="number" min={min} step={step} value={value} onChange={(event) => onChange(Number(event.target.value))} className="rounded-xl border border-slate-200 px-3 py-2.5 outline-none focus:border-teal-500 focus:ring-4 focus:ring-teal-100" />
+      <input type="number" min={min} step={step} value={value} onChange={(event) => onChange(Number(event.target.value))} className="min-w-0 w-full max-w-full rounded-xl border border-slate-200 px-3 py-2.5 outline-none focus:border-teal-500 focus:ring-4 focus:ring-teal-100" />
     </label>
   );
 }
@@ -570,7 +566,7 @@ function EmptyState() {
         <div className="mx-auto mb-4 grid h-14 w-14 place-items-center rounded-2xl bg-teal-100 text-2xl">↗</div>
         <h3 className="text-lg font-black text-slate-950">พร้อมค้นหางานแรกของคุณ</h3>
         <p className="mt-2 max-w-md text-sm leading-6 text-slate-500">
-          ระบบมี mock data 18 งาน พร้อมตัวกรองตารางเรียน ค่าจ้าง ระยะทาง ชั่วโมง และสถานะความน่าเชื่อถือ
+          ระบบจะค้นหาตำแหน่งงานก่อน แล้วค่อยจัดอันดับพร้อมเตือนเรื่องตารางเรียน ค่าจ้าง ระยะทาง และชั่วโมงทำงาน
         </p>
       </div>
     </div>
@@ -591,12 +587,12 @@ function LoadingState() {
 function NoResults({ suggestions, message }: { suggestions: string[]; message: string }) {
   return (
     <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5">
-      <h3 className="text-lg font-black text-amber-950">ยังไม่พบงานที่ตรงทั้งหมด</h3>
+      <h3 className="text-lg font-black text-amber-950">ยังไม่พบตำแหน่งงานจากคำค้นนี้</h3>
       <p className="mt-2 text-sm leading-6 text-amber-900">
         {message}
       </p>
       <div className="mt-4 grid gap-2">
-        {(suggestions.length ? suggestions : ["ลองลดเงื่อนไขค่าจ้าง ระยะทาง หรือชั่วโมงต่อสัปดาห์"]).map((suggestion) => (
+        {(suggestions.length ? suggestions : ["ลองใช้ชื่อเรียกอื่นของตำแหน่งงานเดิม หรือระบุพื้นที่ให้ชัดขึ้น"]).map((suggestion) => (
           <div key={suggestion} className="rounded-xl bg-white px-4 py-3 text-sm font-semibold text-amber-900">{suggestion}</div>
         ))}
       </div>

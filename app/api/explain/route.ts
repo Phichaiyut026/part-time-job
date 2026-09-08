@@ -1,7 +1,6 @@
-export const runtime = "edge";
+import { requestGemini } from "../gemini";
 
-const GEMINI_MODEL = "gemini-2.5-flash";
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+export const runtime = "edge";
 
 type ExplainPayload = {
   profile?: {
@@ -44,7 +43,7 @@ Do not recalculate schedules. Do not claim a job is safe or conflict-free unless
 If isRelaxed is true or warnings exist, clearly say it is a near match and mention the main warning.
 
 Write one concise Thai paragraph, friendly and useful for a university student.
-Mention the best job first when results exist. If no results exist, explain which constraints the student can relax.
+Mention the best job first when results exist. If no results exist, suggest searching the same position with another Thai/English title or a clearer location before changing wage, distance, or hours.
 
 Student:
 ${JSON.stringify(payload.profile ?? {}, null, 2)}
@@ -72,13 +71,7 @@ export async function POST(request: Request) {
 
   try {
     const payload = (await request.json()) as ExplainPayload;
-    const response = await fetch(GEMINI_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": apiKey,
-      },
-      body: JSON.stringify({
+    const response = await requestGemini(apiKey, {
         contents: [
           {
             parts: [{ text: buildPrompt(payload) }],
@@ -86,9 +79,8 @@ export async function POST(request: Request) {
         ],
         generationConfig: {
           temperature: 0.4,
-          maxOutputTokens: 220,
+          maxOutputTokens: 1200,
         },
-      }),
     });
 
     const data = await response.json();

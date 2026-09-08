@@ -1,3 +1,5 @@
+import { planSearch } from "./search-plan";
+
 export const runtime = "edge";
 
 const OPENWEBNINJA_URL = "https://api.openwebninja.com/jsearch/search-v2";
@@ -175,11 +177,17 @@ export async function GET(request: Request) {
   }
 
   try {
+    const plan = await planSearch(query.slice(0, 300));
+    const searchedQueries: string[] = [];
+    let jobs: ReturnType<typeof normalizeJobs> = [];
+    for (const searchQuery of plan.queries) {
     const upstreamUrl = new URL(OPENWEBNINJA_URL);
-    upstreamUrl.searchParams.set("query", apiQuery);
+    upstreamUrl.searchParams.set("query", buildLocationQuery(searchQuery, location));
+    searchedQueries.push(searchQuery);
 
     const response = await fetch(upstreamUrl, {
       method: "GET",
+      signal: AbortSignal.timeout(15000),
       headers: {
         "X-API-Key": apiKey,
       },
@@ -194,12 +202,16 @@ export async function GET(request: Request) {
       );
     }
 
+    jobs = normalizeJobs(data, location);
+    if (jobs.some((job) => job.status !== "suspicious")) break;
+    }
+
     return Response.json({
       source: "openwebninja",
       query: apiQuery,
       location,
-      jobs: normalizeJobs(data, location),
-      raw: data,
+      jobs,
+      searchPlan: { aiUsed: plan.aiUsed, message: plan.message, searchedQueries },
     });
   } catch (error) {
     return Response.json(
