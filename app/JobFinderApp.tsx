@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 type Day =
   | "Monday"
@@ -29,7 +29,7 @@ type Job = {
   status: Status;
   location?: string;
   country?: string;
-  source?: "mock" | "openwebninja";
+  source?: "openwebninja";
 };
 
 type StudentProfile = {
@@ -37,9 +37,9 @@ type StudentProfile = {
   major: string;
   skills: string[];
   interests: string[];
-  minWage: number;
-  maxDistance: number;
-  maxHours: number;
+  minWage: number | "";
+  maxDistance: number | "";
+  maxHours: number | "";
 };
 
 type MatchResult = {
@@ -56,32 +56,11 @@ type MatchResult = {
   weeklyHours: number;
 };
 
-type JobSource = "mock" | "live" | "empty-live" | "fallback";
+type JobSource = "idle" | "live" | "empty-live" | "error";
 
 const days: Day[] = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const skillOptions = ["English", "Excel", "Sales", "Teaching", "Design", "Coding"];
 const interestOptions = ["Cafe", "Tutoring", "Retail", "Online", "Event"];
-
-const mockJobs: Job[] = [
-  { id: 1, title: "Barista Part-time", company: "Bright Bean Cafe", category: "Cafe", shifts: [{ day: "Monday", start: "17:00", end: "21:00" }, { day: "Wednesday", start: "17:00", end: "21:00" }, { day: "Friday", start: "16:00", end: "20:00" }], wage: 75, distance: 1.2, skills: ["English", "Sales"], interests: ["Cafe"], applyUrl: "https://example.com/apply/bright-bean", status: "verified" },
-  { id: 2, title: "Math Tutor Assistant", company: "Smart Path Tutor", category: "Tutoring", shifts: [{ day: "Tuesday", start: "17:30", end: "20:30" }, { day: "Thursday", start: "17:30", end: "20:30" }], wage: 140, distance: 2.4, skills: ["Teaching", "English"], interests: ["Tutoring"], applyUrl: "https://example.com/apply/smart-path", status: "verified" },
-  { id: 3, title: "Retail Sales Crew", company: "Campus Mall Store", category: "Retail", shifts: [{ day: "Saturday", start: "10:00", end: "16:00" }, { day: "Sunday", start: "10:00", end: "16:00" }], wage: 80, distance: 3.6, skills: ["Sales"], interests: ["Retail"], applyUrl: "https://example.com/apply/campus-mall", status: "verified" },
-  { id: 4, title: "Online Data Entry", company: "Northstar Admin", category: "Online", shifts: [{ day: "Monday", start: "20:00", end: "23:00" }, { day: "Wednesday", start: "20:00", end: "23:00" }, { day: "Thursday", start: "20:00", end: "23:00" }], wage: 95, distance: 0, skills: ["Excel"], interests: ["Online"], applyUrl: "https://example.com/apply/northstar-admin", status: "verified" },
-  { id: 5, title: "Event Registration Staff", company: "Metro Expo Team", category: "Event", shifts: [{ day: "Friday", start: "18:00", end: "22:00" }, { day: "Saturday", start: "09:00", end: "17:00" }], wage: 100, distance: 5.5, skills: ["English", "Sales"], interests: ["Event"], applyUrl: "https://example.com/apply/metro-expo", status: "verified" },
-  { id: 6, title: "Graphic Design Intern", company: "Studio Little Dot", category: "Online", shifts: [{ day: "Tuesday", start: "19:00", end: "22:00" }, { day: "Thursday", start: "19:00", end: "22:00" }], wage: 120, distance: 0, skills: ["Design"], interests: ["Online"], applyUrl: "https://example.com/apply/little-dot", status: "verified" },
-  { id: 7, title: "Junior Web Content Helper", company: "EduSpark Labs", category: "Online", shifts: [{ day: "Monday", start: "18:00", end: "21:00" }, { day: "Thursday", start: "18:00", end: "21:00" }], wage: 135, distance: 0, skills: ["Coding", "English"], interests: ["Online"], applyUrl: "https://example.com/apply/eduspark", status: "verified" },
-  { id: 8, title: "Bookstore Cashier", company: "UniBooks", category: "Retail", shifts: [{ day: "Monday", start: "13:00", end: "17:00" }, { day: "Wednesday", start: "13:00", end: "17:00" }], wage: 70, distance: 0.8, skills: ["Sales", "Excel"], interests: ["Retail"], applyUrl: "https://example.com/apply/unibooks", status: "verified" },
-  { id: 9, title: "English Conversation Coach", company: "SpeakUp Center", category: "Tutoring", shifts: [{ day: "Wednesday", start: "18:00", end: "20:00" }, { day: "Saturday", start: "13:00", end: "17:00" }], wage: 160, distance: 4.2, skills: ["English", "Teaching"], interests: ["Tutoring"], applyUrl: "https://example.com/apply/speakup", status: "verified" },
-  { id: 10, title: "Campus Cafe Cashier", company: "Fresh Cup Kiosk", category: "Cafe", shifts: [{ day: "Tuesday", start: "16:00", end: "20:00" }, { day: "Thursday", start: "16:00", end: "20:00" }], wage: 72, distance: 0.4, skills: ["Sales"], interests: ["Cafe", "Retail"], applyUrl: "https://example.com/apply/fresh-cup", status: "verified" },
-  { id: 11, title: "Survey Booth Staff", company: "Insight Fieldwork", category: "Event", shifts: [{ day: "Sunday", start: "11:00", end: "18:00" }], wage: 110, distance: 6.8, skills: ["English", "Sales"], interests: ["Event"], applyUrl: "https://example.com/apply/insight-fieldwork", status: "verified" },
-  { id: 12, title: "Spreadsheet Support Assistant", company: "FinLite Office", category: "Online", shifts: [{ day: "Tuesday", start: "18:00", end: "21:00" }, { day: "Friday", start: "18:00", end: "21:00" }], wage: 125, distance: 1.7, skills: ["Excel"], interests: ["Online"], applyUrl: "https://example.com/apply/finlite", status: "verified" },
-  { id: 13, title: "Premium Promo Recruit", company: "Fast Cash Network", category: "Event", shifts: [{ day: "Monday", start: "19:00", end: "22:00" }, { day: "Tuesday", start: "19:00", end: "22:00" }], wage: 320, distance: 1.5, skills: ["Sales"], interests: ["Event"], applyUrl: "https://example.com/apply/fast-cash", status: "suspicious" },
-  { id: 14, title: "Weekend Bakery Helper", company: "Sunny Oven", category: "Cafe", shifts: [{ day: "Saturday", start: "07:00", end: "12:00" }, { day: "Sunday", start: "07:00", end: "12:00" }], wage: 78, distance: 2.1, skills: ["Sales"], interests: ["Cafe"], applyUrl: "https://example.com/apply/sunny-oven", status: "verified" },
-  { id: 15, title: "Code Lab Teaching Aide", company: "KidCode Academy", category: "Tutoring", shifts: [{ day: "Saturday", start: "09:00", end: "15:00" }], wage: 180, distance: 5.0, skills: ["Coding", "Teaching"], interests: ["Tutoring"], applyUrl: "https://example.com/apply/kidcode", status: "verified" },
-  { id: 16, title: "Social Media Design Crew", company: "Campus Live Club", category: "Event", shifts: [{ day: "Friday", start: "17:00", end: "21:00" }, { day: "Sunday", start: "14:00", end: "17:00" }], wage: 115, distance: 1.1, skills: ["Design", "English"], interests: ["Event", "Online"], applyUrl: "https://example.com/apply/campus-live", status: "verified" },
-  { id: 17, title: "Restaurant Service Staff", company: "Bowl & Spoon", category: "Retail", shifts: [{ day: "Monday", start: "18:00", end: "22:00" }, { day: "Wednesday", start: "18:00", end: "22:00" }, { day: "Saturday", start: "18:00", end: "22:00" }], wage: 85, distance: 3.2, skills: ["Sales", "English"], interests: ["Retail", "Cafe"], applyUrl: "https://example.com/apply/bowl-spoon", status: "verified" },
-  { id: 18, title: "Night Chat Support", company: "HelpDesk Mini", category: "Online", shifts: [{ day: "Tuesday", start: "21:00", end: "23:59" }, { day: "Thursday", start: "21:00", end: "23:59" }, { day: "Sunday", start: "21:00", end: "23:59" }], wage: 130, distance: 0, skills: ["English", "Excel"], interests: ["Online"], applyUrl: "https://example.com/apply/helpdesk-mini", status: "verified" },
-];
 
 const defaultSchedule: ScheduleBlock[] = [
   { id: 1, day: "Monday", start: "09:00", end: "12:00" },
@@ -90,13 +69,13 @@ const defaultSchedule: ScheduleBlock[] = [
 ];
 
 const initialProfile: StudentProfile = {
-  name: "Nicha",
-  major: "Business English",
-  skills: ["English", "Sales"],
-  interests: ["Cafe", "Online"],
-  minWage: 75,
-  maxDistance: 5,
-  maxHours: 15,
+  name: "",
+  major: "",
+  skills: [],
+  interests: [],
+  minWage: "",
+  maxDistance: "",
+  maxHours: "",
 };
 
 function timeToMinutes(value: string) {
@@ -128,22 +107,25 @@ function formatShifts(shifts: Shift[]) {
 }
 
 function scoreJob(job: Job, profile: StudentProfile): MatchResult {
+  const minWage = Number(profile.minWage);
+  const maxDistance = Number(profile.maxDistance);
+  const maxHours = Number(profile.maxHours);
   const matchedSkills = job.skills.filter((skill) => profile.skills.includes(skill));
   const matchedInterests = job.interests.filter((interest) => profile.interests.includes(interest));
   const skillBase = job.skills.length ? matchedSkills.length / job.skills.length : 1;
   const interestBoost = matchedInterests.length ? 0.2 : 0;
   const skillScore = Math.min(35, Math.round((skillBase + interestBoost) * 35));
   const hours = Number(weeklyHours(job).toFixed(1));
-  const timeScore = Math.round(Math.max(0, 1 - Math.abs(profile.maxHours - hours) / Math.max(profile.maxHours, 1)) * 25);
-  const wageScore = Math.round(Math.min(1, job.wage / Math.max(profile.minWage * 1.6, 1)) * 20);
-  const distanceScore = Math.round(Math.max(0, 1 - job.distance / Math.max(profile.maxDistance, 1)) * 20);
+  const timeScore = Math.round(Math.max(0, 1 - Math.abs(maxHours - hours) / Math.max(maxHours, 1)) * 25);
+  const wageScore = Math.round(Math.min(1, job.wage / Math.max(minWage * 1.6, 1)) * 20);
+  const distanceScore = Math.round(Math.max(0, 1 - job.distance / Math.max(maxDistance, 1)) * 20);
   const score = Math.min(100, skillScore + timeScore + wageScore + distanceScore);
 
   const reasons = [
     "ไม่ชนกับตารางเรียน",
     matchedSkills.length ? `ทักษะตรงกัน: ${matchedSkills.join(", ")}` : "ไม่ต้องใช้ทักษะที่คุณเลือกโดยตรงมากนัก",
     matchedInterests.length ? `ตรงกับความสนใจด้าน ${matchedInterests.join(", ")}` : "ประเภทงานยังอยู่ในเกณฑ์ที่ทำได้",
-    `${hours} ชั่วโมง/สัปดาห์ จากเพดาน ${profile.maxHours} ชั่วโมง`,
+    `${hours} ชั่วโมง/สัปดาห์${maxHours ? ` จากเพดาน ${maxHours} ชั่วโมง` : ""}`,
     job.distance === 0 ? "ทำงานออนไลน์ ไม่มีระยะทางเดินทาง" : `อยู่ห่าง ${job.distance} กม.`,
   ];
 
@@ -162,10 +144,6 @@ function scoreJob(job: Job, profile: StudentProfile): MatchResult {
   };
 }
 
-function filterAndScore(profile: StudentProfile, schedule: ScheduleBlock[], query = "") {
-  return filterAndScoreJobs(findJobsByQuery(mockJobs, query), profile, schedule);
-}
-
 function filterAndScoreJobs(jobs: Job[], profile: StudentProfile, schedule: ScheduleBlock[]) {
   return jobs
     .filter((job) => job.status !== "suspicious")
@@ -173,33 +151,19 @@ function filterAndScoreJobs(jobs: Job[], profile: StudentProfile, schedule: Sche
     .sort((a, b) => b.score - a.score);
 }
 
-function findJobsByQuery(jobs: Job[], query: string) {
-  const normalizedTerms = query
-    .toLowerCase()
-    .split(/\s+/)
-    .map((term) => term.trim())
-    .filter((term) => term.length > 2 && !["part", "time", "jobs", "job", "student"].includes(term));
-
-  if (!normalizedTerms.length) return jobs;
-
-  const matched = jobs.filter((job) => {
-    const searchable = `${job.title} ${job.company} ${job.category} ${job.skills.join(" ")} ${job.interests.join(" ")}`.toLowerCase();
-    return normalizedTerms.some((term) => searchable.includes(term));
-  });
-
-  return matched.length ? matched : jobs;
-}
-
 function scoreJobWithWarnings(job: Job, profile: StudentProfile, schedule: ScheduleBlock[]) {
   const result = scoreJob(job, profile);
+  const minWage = Number(profile.minWage);
+  const maxDistance = Number(profile.maxDistance);
+  const maxHours = Number(profile.maxHours);
   const hours = weeklyHours(job);
   const warnings = [];
   const scheduleSafe = !hasClassConflict(job, schedule);
 
   if (!scheduleSafe) warnings.push("เวลางานอาจชนกับตารางเรียน");
-  if (job.wage < profile.minWage) warnings.push(`ค่าจ้างต่ำกว่าเป้า ${profile.minWage} บาท/ชม.`);
-  if (job.distance > profile.maxDistance) warnings.push(`ระยะทางเกินเป้า ${profile.maxDistance} กม.`);
-  if (hours > profile.maxHours) warnings.push(`ชั่วโมงต่อสัปดาห์เกินเป้า ${profile.maxHours} ชม.`);
+  if (minWage > 0 && job.wage < minWage) warnings.push(`ค่าจ้างต่ำกว่าเป้า ${minWage} บาท/ชม.`);
+  if (maxDistance > 0 && job.distance > maxDistance) warnings.push(`ระยะทางเกินเป้า ${maxDistance} กม.`);
+  if (maxHours > 0 && hours > maxHours) warnings.push(`ชั่วโมงต่อสัปดาห์เกินเป้า ${maxHours} ชม.`);
 
   const penalty = warnings.length * 8 + (scheduleSafe ? 0 : 12);
   return {
@@ -260,8 +224,8 @@ export function JobFinderApp() {
   const [schedule, setSchedule] = useState<ScheduleBlock[]>(defaultSchedule);
   const [jobQuery, setJobQuery] = useState("part time student jobs");
   const [jobLocation, setJobLocation] = useState("Bangkok, Thailand");
-  const [jobSource, setJobSource] = useState<JobSource>("mock");
-  const [sourceMessage, setSourceMessage] = useState("ยังไม่ได้ค้นหา ระบบพร้อมใช้ mock data สำหรับ MVP");
+  const [jobSource, setJobSource] = useState<JobSource>("idle");
+  const [sourceMessage, setSourceMessage] = useState("กรอกตำแหน่งและพื้นที่เพื่อเริ่มค้นหางานจริง");
   const [liveJobCount, setLiveJobCount] = useState(0);
   const [hasSearched, setHasSearched] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
@@ -269,8 +233,6 @@ export function JobFinderApp() {
   const [aiExplanation, setAiExplanation] = useState("");
   const [searchPlanMessage, setSearchPlanMessage] = useState("");
   const [results, setResults] = useState<MatchResult[]>([]);
-  const suspiciousCount = useMemo(() => mockJobs.filter((job) => job.status === "suspicious").length, []);
-
   const updateArray = (field: "skills" | "interests", value: string) => {
     setProfile((current) => {
       const exists = current[field].includes(value);
@@ -361,14 +323,13 @@ export function JobFinderApp() {
       setIsSearching(false);
       explainResults(displayResults);
     } catch (error) {
-      const nextResults = filterAndScore(profile, schedule, jobQuery);
-      setResults(nextResults);
-      setJobSource("fallback");
+      setResults([]);
+      setJobSource("error");
       setSourceMessage(
-        `เรียก OpenWebNinja ไม่สำเร็จ (${error instanceof Error ? error.message : "unknown error"}) จึงค้นจาก mock data ตามตำแหน่งงานที่กรอกไว้ก่อน`,
+        `เรียก API ไม่สำเร็จ (${error instanceof Error ? error.message : "unknown error"}) กรุณาตรวจสอบ API Key หรือการเชื่อมต่อ แล้วลองใหม่`,
       );
       setIsSearching(false);
-      explainResults(nextResults);
+      setIsExplaining(false);
     }
   };
 
@@ -387,9 +348,8 @@ export function JobFinderApp() {
               หาและจัดอันดับงานพาร์ทไทม์ที่ไม่ชนตารางเรียน พร้อมกรองงานเสี่ยง scam ออกก่อนแนะนำ
             </p>
           </div>
-          <div className="hidden shrink-0 grid-cols-3 gap-2 text-center sm:grid">
-            <StatCard value={mockJobs.length} label="Mock jobs" color="teal" />
-            <StatCard value={liveJobCount || suspiciousCount} label={liveJobCount ? "Live jobs" : "Blocked"} color="amber" />
+          <div className="hidden shrink-0 grid-cols-2 gap-2 text-center sm:grid">
+            <StatCard value={liveJobCount} label="Live jobs" color="teal" />
             <StatCard value={results.length} label="Matches" color="sky" />
           </div>
         </header>
@@ -464,12 +424,12 @@ export function JobFinderApp() {
                 <span className="w-fit rounded-full bg-emerald-50 px-3 py-1 text-xs font-black text-emerald-700">deterministic schedule check</span>
               </div>
               <div className={`mt-4 rounded-xl px-4 py-3 text-sm font-bold ${
-                jobSource === "live"
+                  jobSource === "live"
                   ? "bg-emerald-50 text-emerald-800"
                   : jobSource === "empty-live"
                     ? "bg-sky-50 text-sky-800"
-                  : jobSource === "fallback"
-                    ? "bg-amber-50 text-amber-900"
+                  : jobSource === "error"
+                    ? "bg-rose-50 text-rose-800"
                     : "bg-slate-50 text-slate-600"
               }`}>
                 {sourceMessage}
@@ -501,6 +461,8 @@ export function JobFinderApp() {
                 <EmptyState />
               ) : isSearching ? (
                 <LoadingState />
+              ) : jobSource === "error" ? (
+                <ErrorState message={sourceMessage} />
               ) : results.length === 0 ? (
                 <NoResults suggestions={suggestions} message={sourceMessage} />
               ) : (
@@ -539,11 +501,11 @@ function TextInput({ label, value, onChange }: { label: string; value: string; o
   );
 }
 
-function NumberInput({ label, value, min, step, onChange }: { label: string; value: number; min: number; step?: number; onChange: (value: number) => void }) {
+function NumberInput({ label, value, min, step, onChange }: { label: string; value: number | ""; min: number; step?: number; onChange: (value: number | "") => void }) {
   return (
     <label className="grid min-w-0 gap-1 text-sm font-semibold text-slate-700">
       {label}
-      <input type="number" min={min} step={step} value={value} onChange={(event) => onChange(Number(event.target.value))} className="min-w-0 w-full max-w-full rounded-xl border border-slate-200 px-3 py-2.5 outline-none focus:border-teal-500 focus:ring-4 focus:ring-teal-100" />
+      <input type="number" min={min} step={step} value={value} placeholder="กรอกค่า" onChange={(event) => onChange(event.target.value === "" ? "" : Number(event.target.value))} className="min-w-0 w-full max-w-full rounded-xl border border-slate-200 px-3 py-2.5 outline-none focus:border-teal-500 focus:ring-4 focus:ring-teal-100" />
     </label>
   );
 }
@@ -596,6 +558,15 @@ function NoResults({ suggestions, message }: { suggestions: string[]; message: s
           <div key={suggestion} className="rounded-xl bg-white px-4 py-3 text-sm font-semibold text-amber-900">{suggestion}</div>
         ))}
       </div>
+    </div>
+  );
+}
+
+function ErrorState({ message }: { message: string }) {
+  return (
+    <div className="rounded-2xl border border-rose-200 bg-rose-50 p-5">
+      <h3 className="text-lg font-black text-rose-950">เกิดข้อผิดพลาดในการค้นหา</h3>
+      <p className="mt-2 text-sm leading-6 text-rose-900">{message}</p>
     </div>
   );
 }
