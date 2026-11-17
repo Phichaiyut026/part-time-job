@@ -1,0 +1,6 @@
+numpy
+opencv-python-headless
+pyclipper
+onnxruntime
+# optional, faster on Intel CPUs (the runtime falls back to onnxruntime without it):
+# openvino

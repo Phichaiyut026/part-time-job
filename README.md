@@ -87,6 +87,36 @@ or enforce explicit server-side membership or allowlist checks.
 Use SIWC for account pages, user-specific dashboards, saved records, and write
 actions tied to the current ChatGPT user. Leave public content anonymous.
 
+## Reading a Timetable Picture (OCR + DeepSeek)
+
+Students can upload a picture of their class timetable instead of painting the grid:
+
+1. `ocr-service/` runs [iapp/OpenThai2.0-OCR-Text](https://huggingface.co/iapp/OpenThai2.0-OCR-Text)
+   (CPU only) and returns each text line with its box. It is Python, so it runs as its own process;
+   the Cloudflare Worker cannot run it.
+2. `app/api/schedule/ocr/route.ts` sends those lines (with positions, so grid timetables keep their
+   rows and columns) to DeepSeek, which answers with class days and times as JSON.
+3. The route validates every block, and the student ticks which ones to keep before they replace the grid.
+
+Setup (once):
+
+```bash
+cd ocr-service
+python -m venv .venv
+.venv/Scripts/python -m pip install -r requirements.txt   # macOS/Linux: .venv/bin/python
+.venv/Scripts/python download_model.py
+```
+
+Run it next to `npm run dev`:
+
+```bash
+cd ocr-service && .venv/Scripts/python server.py   # http://127.0.0.1:8765
+```
+
+Set `DEEPSEEK_API_KEY` (and `OCR_SERVICE_URL` if the OCR service runs elsewhere) in `.env`.
+In production, host `ocr-service` on any small server and set `OCR_TOKEN` there and
+`OCR_SERVICE_TOKEN` in the app to the same secret.
+
 ## Useful Commands
 
 - `npm run dev`: start local development

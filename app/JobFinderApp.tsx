@@ -1,753 +1,1333 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from "react";
+import {
+  agentExplanation,
+  days,
+  defaultSchedule,
+  filterAndScoreJobs,
+  formatDistance,
+  formatWage,
+  getSuggestions,
+  initialProfile,
+  interestOptions,
+  scheduleStatus,
+  searchDemoJobs,
+  shiftsOverlap,
+  skillOptions,
+  thaiDayNames,
+  timeToMinutes,
+  type DataSource,
+  type Day,
+  type Job,
+  type JobSource,
+  type MatchResult,
+  type ScheduleBlock,
+  type SearchOutcome,
+  type Shift,
+  type StudentProfile,
+  type Tier,
+} from "./job-logic";
+import { ALL_THAILAND, DEFAULT_LOCATION, provinceByLocation, provinces, regions } from "./thai-provinces";
+import { saveTrace, type RemovedJob, type SearchTrace, type ServerTrace } from "./trace";
+import { SiteHeader } from "./site-header";
+import { ScheduleOcr } from "./ScheduleOcr";
 
-type Day =
-  | "Monday"
-  | "Tuesday"
-  | "Wednesday"
-  | "Thursday"
-  | "Friday"
-  | "Saturday"
-  | "Sunday";
+/* ---------- Week grid helpers ---------- */
 
-type Status = "verified" | "suspicious";
-type Shift = { day: Day; start: string; end: string };
-type ScheduleBlock = Shift & { id: number };
+const HOURS = Array.from({ length: 15 }, (_, index) => index + 7); // cells 07:00–22:00
+const GRID_START = 7 * 60;
+const GRID_END = 22 * 60;
 
-type Job = {
-  id: number;
-  title: string;
-  company: string;
-  category: string;
-  shifts: Shift[];
-  wage: number;
-  distance: number;
-  skills: string[];
-  interests: string[];
-  applyUrl: string;
-  status: Status;
-  location?: string;
-  country?: string;
-  source?: "openwebninja";
+const dayShort: Record<Day, string> = {
+  Monday: "จ.",
+  Tuesday: "อ.",
+  Wednesday: "พ.",
+  Thursday: "พฤ.",
+  Friday: "ศ.",
+  Saturday: "ส.",
+  Sunday: "อา.",
 };
 
-type StudentProfile = {
-  name: string;
-  major: string;
-  skills: string[];
-  interests: string[];
-  minWage: number | "";
-  maxDistance: number | "";
-  maxHours: number | "";
-};
+const dayLong = thaiDayNames;
 
-type MatchResult = {
-  job: Job;
-  score: number;
-  reasons: string[];
-  warnings: string[];
-  scheduleSafe: boolean;
-  isRelaxed: boolean;
-  skillScore: number;
-  timeScore: number;
-  wageScore: number;
-  distanceScore: number;
-  weeklyHours: number;
-};
+const pad = (hour: number) => `${String(hour).padStart(2, "0")}:00`;
+const cellKey = (day: Day, hour: number) => `${day}-${hour}`;
 
-type JobSource = "idle" | "live" | "empty-live" | "error";
-
-const days: Day[] = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-const skillOptions = ["English", "Excel", "Sales", "Teaching", "Design", "Coding"];
-const interestOptions = ["Cafe", "Tutoring", "Retail", "Online", "Event"];
-
-const defaultSchedule: ScheduleBlock[] = [
-  { id: 1, day: "Monday", start: "09:00", end: "12:00" },
-  { id: 2, day: "Tuesday", start: "13:00", end: "16:00" },
-  { id: 3, day: "Wednesday", start: "10:00", end: "12:00" },
-];
-
-const initialProfile: StudentProfile = {
-  name: "",
-  major: "",
-  skills: [],
-  interests: [],
-  minWage: "",
-  maxDistance: "",
-  maxHours: "",
-};
-
-function timeToMinutes(value: string) {
-  const [hour, minute] = value.split(":").map(Number);
-  return hour * 60 + minute;
-}
-
-function shiftHours(shift: Shift) {
-  return Math.max(0, timeToMinutes(shift.end) - timeToMinutes(shift.start)) / 60;
-}
-
-function shiftsOverlap(a: Shift, b: Shift) {
-  if (a.day !== b.day) return false;
-  return timeToMinutes(a.start) < timeToMinutes(b.end) && timeToMinutes(a.end) > timeToMinutes(b.start);
-}
-
-function hasClassConflict(job: Job, schedule: ScheduleBlock[]) {
-  return job.shifts.some((jobShift) =>
-    schedule.some((classBlock) => shiftsOverlap(jobShift, classBlock)),
-  );
-}
-
-function weeklyHours(job: Job) {
-  return job.shifts.reduce((total, shift) => total + shiftHours(shift), 0);
-}
-
-function formatShifts(shifts: Shift[]) {
-  return shifts.map((shift) => `${shift.day} ${shift.start}-${shift.end}`).join(", ");
-}
-
-function scoreJob(job: Job, profile: StudentProfile): MatchResult {
-  const minWage = Number(profile.minWage);
-  const maxDistance = Number(profile.maxDistance);
-  const maxHours = Number(profile.maxHours);
-  const matchedSkills = job.skills.filter((skill) => profile.skills.includes(skill));
-  const matchedInterests = job.interests.filter((interest) => profile.interests.includes(interest));
-  const skillBase = job.skills.length ? matchedSkills.length / job.skills.length : 1;
-  const interestBoost = matchedInterests.length ? 0.2 : 0;
-  const skillScore = Math.min(35, Math.round((skillBase + interestBoost) * 35));
-  const hours = Number(weeklyHours(job).toFixed(1));
-  const timeScore = Math.round(Math.max(0, 1 - Math.abs(maxHours - hours) / Math.max(maxHours, 1)) * 25);
-  const wageScore = Math.round(Math.min(1, job.wage / Math.max(minWage * 1.6, 1)) * 20);
-  const distanceScore = Math.round(Math.max(0, 1 - job.distance / Math.max(maxDistance, 1)) * 20);
-  const score = Math.min(100, skillScore + timeScore + wageScore + distanceScore);
-
-  const reasons = [
-    "ไม่ชนกับตารางเรียน",
-    matchedSkills.length ? `ทักษะตรงกัน: ${matchedSkills.join(", ")}` : "ไม่ต้องใช้ทักษะที่คุณเลือกโดยตรงมากนัก",
-    matchedInterests.length ? `ตรงกับความสนใจด้าน ${matchedInterests.join(", ")}` : "ประเภทงานยังอยู่ในเกณฑ์ที่ทำได้",
-    `${hours} ชั่วโมง/สัปดาห์${maxHours ? ` จากเพดาน ${maxHours} ชั่วโมง` : ""}`,
-    job.distance === 0 ? "ทำงานออนไลน์ ไม่มีระยะทางเดินทาง" : `อยู่ห่าง ${job.distance} กม.`,
-  ];
-
-  return {
-    job,
-    score,
-    reasons,
-    warnings: [],
-    scheduleSafe: true,
-    isRelaxed: false,
-    skillScore,
-    timeScore,
-    wageScore,
-    distanceScore,
-    weeklyHours: hours,
-  };
-}
-
-function filterAndScoreJobs(jobs: Job[], profile: StudentProfile, schedule: ScheduleBlock[]) {
-  return jobs
-    .filter((job) => job.status !== "suspicious")
-    .map((job) => scoreJobWithWarnings(job, profile, schedule))
-    .sort((a, b) => b.score - a.score);
-}
-
-function scoreJobWithWarnings(job: Job, profile: StudentProfile, schedule: ScheduleBlock[]) {
-  const result = scoreJob(job, profile);
-  const minWage = Number(profile.minWage);
-  const maxDistance = Number(profile.maxDistance);
-  const maxHours = Number(profile.maxHours);
-  const hours = weeklyHours(job);
-  const warnings = [];
-  const scheduleSafe = !hasClassConflict(job, schedule);
-
-  if (!scheduleSafe) warnings.push("เวลางานอาจชนกับตารางเรียน");
-  if (minWage > 0 && job.wage < minWage) warnings.push(`ค่าจ้างต่ำกว่าเป้า ${minWage} บาท/ชม.`);
-  if (maxDistance > 0 && job.distance > maxDistance) warnings.push(`ระยะทางเกินเป้า ${maxDistance} กม.`);
-  if (maxHours > 0 && hours > maxHours) warnings.push(`ชั่วโมงต่อสัปดาห์เกินเป้า ${maxHours} ชม.`);
-
-  const penalty = warnings.length * 8 + (scheduleSafe ? 0 : 12);
-  return {
-    ...result,
-    score: Math.max(1, result.score - penalty),
-    warnings,
-    scheduleSafe,
-    isRelaxed: warnings.length > 0,
-    reasons: [
-      scheduleSafe ? "ไม่ชนกับตารางเรียน" : "ตำแหน่งงานตรงกับที่ค้นหา แต่ต้องตรวจเวลาซ้ำ",
-      ...result.reasons.slice(1),
-    ],
-  };
-}
-
-function getSuggestions(query: string, location: string) {
-  const suggestions = [];
-  suggestions.push(`ค้นหาตำแหน่ง "${query || "part time student jobs"}" ในพื้นที่ ${location || "Thailand"} ก่อน แล้วค่อยดูเงื่อนไขประกอบ`);
-  suggestions.push("ลองใช้ชื่อภาษาไทยและอังกฤษของตำแหน่งเดียวกัน เช่น Barista / พนักงานร้านกาแฟ");
-  suggestions.push("ใส่พื้นที่ให้ชัดขึ้น เช่น Bangkok, Chiang Mai หรือชื่อเขตที่ต้องการ");
-  return suggestions.slice(0, 3);
-}
-
-function agentExplanation(profile: StudentProfile, schedule: ScheduleBlock[], results: MatchResult[], query: string, location: string) {
-  if (!results.length) {
-    const suggestions = getSuggestions(query, location);
-    return suggestions.length
-      ? `ระบบยังไม่เจอตำแหน่งงานจากคำค้นนี้โดยตรง ควรลองค้นด้วยชื่อเรียกอื่นของตำแหน่งเดิมก่อน เช่น ${suggestions.join(" และ ")}`
-      : "ระบบยังไม่เจอตำแหน่งงานจากคำค้นนี้โดยตรง";
+function scheduleToCells(schedule: ScheduleBlock[]) {
+  const cells = new Set<string>();
+  for (const block of schedule) {
+    const first = Math.floor(timeToMinutes(block.start) / 60);
+    const last = Math.ceil(timeToMinutes(block.end) / 60);
+    for (let hour = first; hour < last; hour += 1) {
+      if (HOURS.includes(hour)) cells.add(cellKey(block.day, hour));
+    }
   }
-
-  const freeDays = days.filter((day) => !schedule.some((block) => block.day === day));
-  const top = results[0];
-  const freeText = freeDays.length
-    ? `คุณไม่มีเวลาเรียนที่กรอกไว้ในวัน ${freeDays.slice(0, 3).join(", ")}`
-    : "คุณมีตารางเรียนกระจายหลายวัน ระบบจึงเลือกงานที่ไม่ทับช่วงเรียนโดยตรง";
-  return `${freeText} งานที่ตรงกับการค้นหาและน่าสนใจที่สุดคือ ${top.job.title} ที่ ${top.job.company} ได้ ${top.score}/100 คะแนน ${top.reasons[1]} ค่าจ้าง ${top.job.wage} บาท/ชม. และระยะทาง ${top.job.distance} กม.`;
+  return cells;
 }
 
-function TogglePill({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`rounded-full border px-3 py-2 text-sm font-semibold transition ${
-        active
-          ? "border-teal-500 bg-teal-50 text-teal-800"
-          : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
-      }`}
-    >
-      {label}
-    </button>
-  );
+/** Merge painted hour cells into class blocks for the conflict checker. */
+function cellsToSchedule(cells: Set<string>): ScheduleBlock[] {
+  const blocks: ScheduleBlock[] = [];
+  let id = 1;
+  for (const day of days) {
+    let runStart: number | null = null;
+    for (const hour of [...HOURS, 99]) {
+      const filled = hour !== 99 && cells.has(cellKey(day, hour));
+      if (filled && runStart === null) runStart = hour;
+      if (!filled && runStart !== null) {
+        blocks.push({ id: id++, day, start: pad(runStart), end: pad(hour === 99 ? 22 : hour) });
+        runStart = null;
+      }
+    }
+  }
+  return blocks;
 }
+
+function formatShiftsThai(shifts: Shift[]) {
+  if (!shifts.length) return "ประกาศไม่ระบุวัน-เวลา";
+  return shifts.map((shift) => `${dayShort[shift.day]} ${shift.start}–${shift.end}`).join(" · ");
+}
+
+/* ---------- API responses ---------- */
+
+/** Parse a JSON body; returns null for HTML error pages (e.g. dev server restarting) instead of throwing. */
+async function readJson(response: Response): Promise<unknown> {
+  const text = await response.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Turn a server error into a short message for students. Technical details (which key, which provider)
+ * go to the browser console for developers only.
+ */
+function describeApiError(error: string | undefined, status: number, details?: unknown) {
+  console.error("[job search]", { error, status, details });
+  const reason = typeof details === "string" ? details : "";
+  if (/run out of searches|limit/i.test(reason) || status === 429) return "ค้นหางานจริงครบจำนวนที่ใช้ได้แล้ว ลองใหม่ภายหลัง";
+  if (/location/i.test(reason)) return `ไม่รู้จักพื้นที่นี้ ลองพิมพ์ เช่น "Bangkok, Thailand"`;
+  if (error === "Could not fetch jobs") return "เชื่อมต่อไม่ได้ ตรวจสอบอินเทอร์เน็ตแล้วลองใหม่";
+  return "ระบบค้นหางานจริงยังไม่พร้อมใช้งานในขณะนี้";
+}
+
+/* ---------- Trace helpers ---------- */
+
+/** Jobs the browser drops before ranking, with a human reason (for the /how-it-works tracking page). */
+function removedJobs(jobs: Job[], schedule: ScheduleBlock[]): RemovedJob[] {
+  const removed: RemovedJob[] = [];
+  for (const job of jobs) {
+    if (job.status === "suspicious") {
+      removed.push({ title: job.title, company: job.company, reason: "มีคำเสี่ยงหลอกลวง (เช่น ให้โอนเงินก่อน / ติดต่อทาง Telegram)" });
+      continue;
+    }
+    if (scheduleStatus(job, schedule) !== "conflict") continue;
+    const clash = job.shifts
+      .flatMap((shift) => schedule.filter((block) => shiftsOverlap(shift, block)).map((block) => ({ shift, block })))
+      .at(0);
+    removed.push({
+      title: job.title,
+      company: job.company,
+      reason: clash
+        ? `เวลางาน ${dayShort[clash.shift.day]} ${clash.shift.start}–${clash.shift.end} ชนคาบเรียน ${clash.block.start}–${clash.block.end}`
+        : "ชนคาบเรียน",
+    });
+  }
+  return removed;
+}
+
+/* ---------- Tier presentation ---------- */
+
+const tierInfo: Record<Tier, { title: string; hint: string; pill: string; pillClass: string }> = {
+  match: {
+    title: "ตรงทุกเกณฑ์",
+    hint: "ไม่ชนคาบเรียน และผ่านค่าจ้าง ระยะทาง ชั่วโมงที่คุณตั้งไว้",
+    pill: "ตรงเกณฑ์",
+    pillClass: "bg-good-soft text-good",
+  },
+  relaxed: {
+    title: "ผ่านเกณฑ์ที่ Agent ผ่อนให้",
+    hint: "ไม่ชนคาบเรียน แต่ใช้ระยะทาง/ค่าจ้างที่ผ่อนลงจากที่คุณตั้ง",
+    pill: "ผ่อนเกณฑ์",
+    pillClass: "bg-accent-soft text-accent-strong",
+  },
+  check: {
+    title: "ข้อมูลไม่ครบ ต้องสอบถามนายจ้าง",
+    hint: "ประกาศไม่บอกเวลา ค่าจ้าง หรือระยะทาง จึงยังยืนยันไม่ได้",
+    pill: "ต้องสอบถาม",
+    pillClass: "bg-warn-soft text-warn",
+  },
+  other: {
+    title: "ไม่ตรงบางเกณฑ์",
+    hint: "ไม่ชนคาบเรียน แต่ค่าจ้าง ระยะทาง หรือชั่วโมงไม่ผ่าน",
+    pill: "ไม่ตรงบางข้อ",
+    pillClass: "bg-class-soft text-muted",
+  },
+};
+const tierOrder: Tier[] = ["match", "relaxed", "check", "other"];
+
+/* ---------- App ---------- */
 
 export function JobFinderApp() {
   const [profile, setProfile] = useState<StudentProfile>(initialProfile);
-  const [schedule, setSchedule] = useState<ScheduleBlock[]>(defaultSchedule);
+  const [cells, setCells] = useState<Set<string>>(() => scheduleToCells(defaultSchedule));
   const [jobQuery, setJobQuery] = useState("part time student jobs");
-  const [jobLocation, setJobLocation] = useState("Bangkok, Thailand");
+  const [jobLocation, setJobLocation] = useState(DEFAULT_LOCATION);
+  const locationName = provinceByLocation(jobLocation)?.th ?? jobLocation;
+  const [dataSource, setDataSource] = useState<DataSource>("live");
   const [jobSource, setJobSource] = useState<JobSource>("idle");
-  const [sourceMessage, setSourceMessage] = useState("กรอกตำแหน่งและพื้นที่เพื่อเริ่มค้นหางานจริง");
-  const [liveJobCount, setLiveJobCount] = useState(0);
+  const [sourceMessage, setSourceMessage] = useState("");
+  const [foundCount, setFoundCount] = useState(0);
+  const [outcome, setOutcome] = useState<SearchOutcome | null>(null);
   const [hasSearched, setHasSearched] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [isExplaining, setIsExplaining] = useState(false);
   const [aiExplanation, setAiExplanation] = useState("");
-  const [searchPlanMessage, setSearchPlanMessage] = useState("");
-  const [results, setResults] = useState<MatchResult[]>([]);
-  const updateArray = (field: "skills" | "interests", value: string) => {
-    setProfile((current) => {
-      const exists = current[field].includes(value);
-      return {
-        ...current,
-        [field]: exists ? current[field].filter((item) => item !== value) : [...current[field], value],
-      };
+  const [openId, setOpenId] = useState<number | null>(null);
+  const [elapsedMs, setElapsedMs] = useState<number | null>(null);
+  const searchStartedAt = useRef(0);
+  const traceRef = useRef<SearchTrace | null>(null);
+
+  const schedule = useMemo(() => cellsToSchedule(cells), [cells]);
+  const results = useMemo(() => outcome?.results ?? [], [outcome]);
+  const busy = isSearching || isExplaining;
+
+  /* Painting class hours with click-and-drag */
+  const paintMode = useRef<boolean | null>(null);
+  useEffect(() => {
+    const stop = () => {
+      paintMode.current = null;
+    };
+    window.addEventListener("pointerup", stop);
+    window.addEventListener("pointercancel", stop);
+    return () => {
+      window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", stop);
+    };
+  }, []);
+
+  const setCell = (key: string, filled: boolean) => {
+    setCells((current) => {
+      if (current.has(key) === filled) return current;
+      const next = new Set(current);
+      if (filled) next.add(key);
+      else next.delete(key);
+      return next;
     });
   };
 
-  const updateSchedule = (id: number, field: keyof Shift, value: string) => {
-    setSchedule((blocks) => blocks.map((block) => (block.id === id ? { ...block, [field]: value } : block)));
+  const onCellPointerDown = (event: PointerEvent<HTMLButtonElement>, key: string) => {
+    if (event.pointerType === "mouse") event.preventDefault(); // no text selection while dragging
+    const mode = !cells.has(key);
+    paintMode.current = mode;
+    setCell(key, mode);
+  };
+  const onCellPointerEnter = (key: string) => {
+    if (paintMode.current !== null) setCell(key, paintMode.current);
+  };
+  const onCellClick = (event: MouseEvent<HTMLButtonElement>, key: string) => {
+    if (event.detail === 0) setCell(key, !cells.has(key)); // keyboard Enter/Space
+  };
+
+  const toggleChip = (field: "skills" | "interests", value: string) => {
+    setProfile((current) => ({
+      ...current,
+      [field]: current[field].includes(value)
+        ? current[field].filter((item) => item !== value)
+        : [...current[field], value],
+    }));
+  };
+
+  const finishTrace = () => {
+    const trace = traceRef.current;
+    if (!trace) return;
+    trace.totalMs = Math.round(performance.now() - searchStartedAt.current);
+    saveTrace(trace);
   };
 
   const explainResults = (nextResults: MatchResult[]) => {
     setIsExplaining(true);
-
+    const explainStarted = performance.now();
+    let explainOk = false;
     fetch("/api/explain", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         profile,
         schedule,
-        suggestions: getSuggestions(jobQuery, jobLocation),
-          results: nextResults.map((result) => ({
-            title: result.job.title,
-            company: result.job.company,
-            score: result.score,
-            wage: result.job.wage,
-            distance: result.job.distance,
-            weeklyHours: result.weeklyHours,
-            scheduleSafe: result.scheduleSafe,
-            isRelaxed: result.isRelaxed,
-            reasons: result.reasons,
-            warnings: result.warnings,
-          })),
+        suggestions: getSuggestions(jobQuery, locationName),
+        results: nextResults.map((result) => ({
+          title: result.job.title,
+          company: result.job.company,
+          score: result.score,
+          wage: result.job.wage,
+          distance: result.job.distance,
+          weeklyHours: result.weeklyHours,
+          scheduleSafe: result.scheduleSafe,
+          scheduleStatus: result.scheduleStatus,
+          isRelaxed: result.isRelaxed,
+          reasons: result.reasons,
+          warnings: result.warnings,
+        })),
       }),
     })
       .then((response) => (response.ok ? response.json() : Promise.reject(response)))
       .then((data: { explanation?: string }) => {
+        explainOk = Boolean(data.explanation?.trim());
         setAiExplanation(data.explanation?.trim() ?? "");
       })
-      .catch(() => {
-        setAiExplanation("");
-      })
+      .catch(() => setAiExplanation(""))
       .finally(() => {
         setIsExplaining(false);
+        setElapsedMs(performance.now() - searchStartedAt.current);
+        traceRef.current?.events.push({
+          actor: "ai",
+          title: "ThaiLLM เขียนคำแนะนำ",
+          detail: explainOk
+            ? `สรุปจาก ${Math.min(nextResults.length, 3)} งานอันดับต้น (ไม่คำนวณตารางเวลาเอง)`
+            : "AI ไม่พร้อม ใช้คำสรุปที่ระบบเขียนเองแทน",
+          ms: Math.round(performance.now() - explainStarted),
+          status: explainOk ? "ok" : "skip",
+        });
+        finishTrace();
       });
   };
 
   const runSearch = async () => {
-    if (isSearching || isExplaining) return;
+    if (busy) return;
     setHasSearched(true);
     setIsSearching(true);
-    setIsExplaining(false);
+    setElapsedMs(null);
+    searchStartedAt.current = performance.now();
     setAiExplanation("");
-    setLiveJobCount(0);
-    setSearchPlanMessage("");
-    setSourceMessage("Agent กำลังทำความเข้าใจตำแหน่งที่ต้องการ และค้นหางานจริงให้คุณ...");
+    setOutcome(null);
+    setOpenId(null);
+    setFoundCount(0);
+    setJobSource("idle");
+    setSourceMessage("กำลังค้นหางาน…");
+    const trace: SearchTrace = {
+      at: new Date().toISOString(),
+      mode: dataSource,
+      query: jobQuery,
+      locationName,
+      totalMs: 0,
+      ok: true,
+      events: [
+        {
+          actor: "browser",
+          title: "อ่านข้อมูลจากหน้าเว็บ",
+          detail: `ตารางเรียน ${schedule.length} ช่วง · ทักษะ ${profile.skills.length} อย่าง · ${dataSource === "demo" ? "โหมดงานตัวอย่าง" : `ส่งคำขอไปเซิร์ฟเวอร์ (${locationName})`}`,
+          status: "ok",
+        },
+      ],
+      sources: [],
+      extraction: [],
+      removed: [],
+    };
+    traceRef.current = trace;
 
     try {
-      const response = await fetch(
-        `/api/jobs?query=${encodeURIComponent(jobQuery)}&location=${encodeURIComponent(jobLocation)}`,
-      );
-      const data = (await response.json()) as { jobs?: Job[]; error?: string; searchPlan?: { message: string; searchedQueries: string[] } };
-      if (!response.ok) {
-        throw new Error(data.error || "Job API unavailable");
-      }
-      const liveJobs = Array.isArray(data.jobs) ? data.jobs : [];
-      if (data.searchPlan) setSearchPlanMessage(`${data.searchPlan.message} • คำที่ค้น: ${data.searchPlan.searchedQueries.join(" → ")}`);
-      setLiveJobCount(liveJobs.length);
+      let foundJobs: Job[];
+      let foundMessage: string;
 
-      if (!liveJobs.length) {
-        setResults([]);
+      if (dataSource === "demo") {
+        const demo = searchDemoJobs(jobQuery);
+        foundJobs = demo.jobs;
+        foundMessage = demo.matched
+          ? `พบงานตัวอย่าง ${foundJobs.length} งาน`
+          : `ไม่พบ "${jobQuery}" ในงานตัวอย่าง จึงแสดงทั้งหมด ${foundJobs.length} งาน`;
+        trace.events.push({ actor: "browser", title: "ค้นในงานตัวอย่าง (ในเครื่อง ไม่ใช้อินเทอร์เน็ต)", detail: foundMessage, ms: 0, status: "ok" });
+        trace.sources = [{ name: "ข้อมูลตัวอย่าง (สมมติ)", count: foundJobs.length }];
+      } else {
+        const response = await fetch(
+          `/api/jobs?query=${encodeURIComponent(jobQuery)}&location=${encodeURIComponent(jobLocation)}`,
+        );
+        const data = (await readJson(response)) as {
+          jobs?: Job[];
+          error?: string;
+          details?: unknown;
+          trace?: ServerTrace;
+        } | null;
+        if (!data) throw new Error("ระบบขัดข้องชั่วคราว ลองกดค้นหาอีกครั้ง");
+        if (!response.ok) throw new Error(describeApiError(data.error, response.status, data.details));
+        foundJobs = Array.isArray(data.jobs) ? data.jobs : [];
+        foundMessage = `พบ ${foundJobs.length} งานใน${locationName}`;
+        if (data.trace) {
+          trace.events.push(...data.trace.events);
+          trace.sources = data.trace.sources;
+          trace.extraction = data.trace.extraction;
+        }
+      }
+
+      setFoundCount(foundJobs.length);
+      setSourceMessage(foundMessage);
+
+      if (!foundJobs.length) {
         setJobSource("empty-live");
-        setSourceMessage("ค้นหาครบทุกคำที่ Agent เตรียมไว้แล้ว แต่ยังไม่พบตำแหน่งงานในพื้นที่นี้");
+        setOutcome({ results: [], excludedConflicts: 0, excludedSuspicious: 0, relaxNote: "" });
         setIsSearching(false);
         explainResults([]);
         return;
       }
 
-      const displayResults = filterAndScoreJobs(liveJobs, profile, schedule);
-      setResults(displayResults);
+      const filterStarted = performance.now();
+      const next = filterAndScoreJobs(foundJobs, profile, schedule);
+      trace.removed = removedJobs(foundJobs, schedule);
+      trace.events.push({
+        actor: "browser",
+        title: "เทียบเวลางานกับตารางเรียน และจัดอันดับ (โค้ด ไม่ใช่ AI)",
+        detail: `ตัดงานชนคาบเรียน ${next.excludedConflicts} · ตัดงานน่าสงสัย ${next.excludedSuspicious} · เหลือจัดอันดับ ${next.results.length} งาน (ตรงเกณฑ์ ${next.results.filter((result) => result.tier === "match").length})`,
+        ms: Math.round(performance.now() - filterStarted),
+        status: "ok",
+      });
+      trace.events.push({
+        actor: "browser",
+        title: "Repeat: ปรับเกณฑ์ถ้างานน้อย",
+        detail: next.relaxNote || "ไม่ต้องผ่อนเกณฑ์",
+        status: next.relaxNote ? "ok" : "skip",
+      });
+      saveTrace(trace);
+      setOutcome(next);
       setJobSource("live");
-      setSourceMessage(
-        `พบงานจริงในพื้นที่ ${jobLocation} จำนวน ${liveJobs.length} รายการ และจัดอันดับตามความเหมาะสมแล้ว`,
-      );
+      setOpenId(next.results[0]?.job.id ?? null);
       setIsSearching(false);
-      explainResults(displayResults);
+      explainResults(next.results);
     } catch (error) {
-      setResults([]);
+      trace.ok = false;
+      trace.events.push({ actor: "browser", title: "ค้นหาไม่สำเร็จ", detail: error instanceof Error ? error.message : "ไม่ทราบสาเหตุ", status: "error" });
+      finishTrace();
       setJobSource("error");
       setSourceMessage(
-        `บริการค้นหางานมีปัญหา (${error instanceof Error ? error.message : "unknown error"}) กรุณาตรวจสอบ API Key หรือการเชื่อมต่อ แล้วลองใหม่`,
+        `${error instanceof Error ? error.message : "ค้นหาไม่สำเร็จ"} · ระหว่างนี้ดู "งานตัวอย่าง" ได้`,
       );
       setIsSearching(false);
       setIsExplaining(false);
     }
   };
 
-  const fallbackExplanation = agentExplanation(profile, schedule, results, jobQuery, jobLocation);
-  const explanation = aiExplanation || fallbackExplanation;
-  const suggestions = getSuggestions(jobQuery, jobLocation);
+  const freeHours = HOURS.length * days.length - cells.size;
+  const matchCount = results.filter((result) => result.tier === "match").length;
+  const explanation = aiExplanation || agentExplanation(profile, schedule, results, jobQuery, locationName);
 
   return (
-    <main className="agent-workspace h-dvh overflow-hidden text-slate-900">
-      <div className="flex h-full w-full flex-col gap-4 px-4 py-4 sm:px-6 lg:gap-6 lg:px-8 lg:py-5">
-        <header className="relative z-10 flex shrink-0 overflow-hidden rounded-3xl border border-white/10 bg-[linear-gradient(115deg,#071b25_0%,#0f2931_56%,#0f4c46_100%)] px-5 py-4 text-white shadow-[0_18px_55px_-28px_rgba(6,78,73,0.9)] md:items-center md:justify-between lg:px-6 lg:py-5">
-          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_82%_0%,rgba(45,212,191,0.22),transparent_32%)]" />
-          <div className="relative flex items-center gap-4">
-            <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl border border-teal-300/30 bg-teal-300/10 text-2xl text-teal-200 shadow-inner shadow-teal-300/10">✦</div>
-            <div>
-              <div className="flex flex-wrap items-center gap-2">
-                <p className="text-sm font-bold uppercase tracking-[0.18em] text-teal-200">Job Match Agent</p>
-                <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-300/20 bg-emerald-300/10 px-2.5 py-1 text-xs font-bold text-emerald-200">
-                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-300" /> พร้อมทำงาน
+    <div className="min-h-dvh bg-paper text-ink">
+      <SiteHeader active="search">
+        <Segmented
+          label="แหล่งข้อมูลงาน"
+          value={dataSource}
+          onChange={(value) => setDataSource(value as DataSource)}
+          options={[
+            { value: "live", label: "งานจริง" },
+            { value: "demo", label: "งานตัวอย่าง" },
+          ]}
+        />
+      </SiteHeader>
+      <Hero />
+
+      <main className="page-layout mx-auto max-w-[1440px] px-4 py-5 sm:px-6 lg:py-7">
+          {/* 2. Class schedule (middle column on wide screens) */}
+          <section className="area-schedule panel p-4 sm:p-5" aria-labelledby="schedule-title">
+            <SectionHead
+              step="2"
+              id="schedule-title"
+              title="ตารางเรียนของคุณ"
+              sub="คลิกหรือลากเพื่อระบายชั่วโมงที่ติดเรียน"
+              right={
+                <div className="flex shrink-0 gap-2">
+                  <SmallButton onClick={() => setCells(scheduleToCells(defaultSchedule))}>ตัวอย่าง</SmallButton>
+                  <SmallButton onClick={() => setCells(new Set())}>ล้าง</SmallButton>
+                </div>
+              }
+            />
+            <ScheduleOcr onApply={(blocks) => setCells(scheduleToCells(blocks.map((block, index) => ({ ...block, id: index + 1 }))))} />
+            <div className="mt-4 grid select-none grid-cols-[2.6rem_repeat(7,minmax(0,1fr))] gap-1" role="group" aria-label="ตารางเรียนรายสัปดาห์">
+              <span />
+              {days.map((day) => (
+                <span key={day} className="pb-1 text-center text-xs font-semibold text-muted">
+                  {dayShort[day]}
                 </span>
-              </div>
-              <h1 className="mt-1 text-2xl font-black tracking-tight sm:text-3xl">ผู้ช่วยค้นหางานพาร์ทไทม์</h1>
-              <p className="mt-1 hidden max-w-2xl text-sm leading-6 text-slate-300 md:block">
-                AI ช่วยปรับคำค้น ค้นหางานจริง และจัดอันดับให้เข้ากับชีวิตนักศึกษา
-              </p>
+              ))}
+              {HOURS.map((hour) => (
+                <WeekRow key={hour} hour={hour}>
+                  {days.map((day) => {
+                    const key = cellKey(day, hour);
+                    return (
+                      <button
+                        key={key}
+                        type="button"
+                        className="slot"
+                        aria-pressed={cells.has(key)}
+                        aria-label={`${dayLong[day]} ${pad(hour)}–${pad(hour + 1)} ${cells.has(key) ? "ติดเรียน" : "ว่าง"}`}
+                        onPointerDown={(event) => onCellPointerDown(event, key)}
+                        onPointerEnter={() => onCellPointerEnter(key)}
+                        onClick={(event) => onCellClick(event, key)}
+                      />
+                    );
+                  })}
+                </WeekRow>
+              ))}
             </div>
-          </div>
-          <div className="relative ml-auto hidden shrink-0 grid-cols-2 gap-2 text-center sm:grid">
-            <StatCard value={liveJobCount} label="งานที่ค้นพบ" />
-            <StatCard value={results.length} label="งานที่จัดอันดับ" />
-          </div>
-        </header>
+            <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted">
+              <Legend swatch="bg-class" label="ติดเรียน" />
+              <Legend swatch="bg-sunken ring-1 ring-line" label="ว่าง" />
+              <span className="ml-auto font-semibold text-ink">
+                ว่าง {freeHours} ชม./สัปดาห์ (ช่วง 07:00–22:00)
+              </span>
+            </div>
+          </section>
 
-        <section className="app-scrollbar grid min-h-0 flex-1 gap-6 overflow-y-auto overscroll-contain lg:grid-cols-[minmax(0,380px)_minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)] lg:overflow-hidden xl:grid-cols-[420px_minmax(0,1fr)]">
-          <aside aria-label="ข้อมูลและเงื่อนไขค้นหางาน" className="app-scrollbar min-w-0 space-y-6 lg:min-h-0 lg:overflow-y-auto lg:overscroll-contain lg:[scrollbar-gutter:stable]">
-            <section className="surface-card rounded-3xl p-5">
-              <div className="mb-4">
-                <div className="flex items-center gap-3">
-                  <span className="step-number">01</span>
-                  <div>
-                    <h2 className="text-lg font-black text-slate-950">บอก Agent ว่าคุณเป็นใคร</h2>
-                    <p className="text-sm text-slate-500">ใช้ข้อมูลนี้เพื่อเรียงงานที่เหมาะกับคุณ</p>
-                  </div>
-                </div>
+          {/* 1. Preferences (left column on wide screens) */}
+          <section className="area-prefs panel flex flex-col p-4 sm:p-5" aria-labelledby="prefs-title">
+            <SectionHead step="1" id="prefs-title" title="งานแบบไหนที่อยากได้" sub="Agent ใช้ข้อมูลนี้คัดกรองและจัดอันดับ" />
+            <div className="mt-4 grid gap-4">
+              <Field label="ตำแหน่งงาน">
+                <input className="field" value={jobQuery} onChange={(event) => setJobQuery(event.target.value)} placeholder="เช่น ติวเตอร์, barista" />
+              </Field>
+              <Field label="จังหวัด">
+                <select className="field" value={jobLocation} onChange={(event) => setJobLocation(event.target.value)}>
+                  <option value={ALL_THAILAND.location}>{ALL_THAILAND.th}</option>
+                  {regions.map((region) => (
+                    <optgroup key={region.id} label={region.th}>
+                      {provinces
+                        .filter((province) => province.region === region.id)
+                        .map((province) => (
+                          <option key={province.location} value={province.location}>
+                            {province.th}
+                          </option>
+                        ))}
+                    </optgroup>
+                  ))}
+                </select>
+              </Field>
+              <div className="grid grid-cols-3 gap-2">
+                <NumberField label="ค่าจ้างขั้นต่ำ" unit="บาท/ชม." value={profile.minWage} onChange={(value) => setProfile({ ...profile, minWage: value })} />
+                <NumberField label="ระยะทางสูงสุด" unit="กม." step={0.5} value={profile.maxDistance} onChange={(value) => setProfile({ ...profile, maxDistance: value })} />
+                <NumberField label="ทำได้สูงสุด" unit="ชม./สัปดาห์" value={profile.maxHours} onChange={(value) => setProfile({ ...profile, maxHours: value })} />
               </div>
-              <div className="grid gap-4">
-                <TextInput label="ชื่อ" value={profile.name} onChange={(value) => setProfile({ ...profile, name: value })} />
-                <TextInput label="คณะ/สาขา" value={profile.major} onChange={(value) => setProfile({ ...profile, major: value })} />
+              <Chips title="ทักษะ" options={skillOptions} selected={profile.skills} onToggle={(value) => toggleChip("skills", value)} />
+              <Chips title="สนใจงานด้าน" options={interestOptions} selected={profile.interests} onToggle={(value) => toggleChip("interests", value)} />
+            </div>
+            <button
+              type="button"
+              onClick={runSearch}
+              disabled={busy}
+              className="btn-primary font-display mt-5 flex w-full items-center justify-center gap-2 rounded-2xl px-4 py-3.5 text-base font-semibold disabled:cursor-wait disabled:opacity-70 xl:mt-auto"
+            >
+              <Icon name="spark" className="h-5 w-5" />
+              {isSearching ? "Agent กำลังค้นหา…" : isExplaining ? "Agent กำลังสรุปผล…" : "ให้ Agent หางานให้"}
+            </button>
+          </section>
 
-                <OptionGroup title="ทักษะ" options={skillOptions} selected={profile.skills} onToggle={(skill) => updateArray("skills", skill)} />
-                <OptionGroup title="ความสนใจ" options={interestOptions} selected={profile.interests} onToggle={(interest) => updateArray("interests", interest)} />
-                <TextInput label="ตำแหน่งงานที่ต้องการ" value={jobQuery} onChange={setJobQuery} />
-                <TextInput label="พื้นที่ค้นหา" value={jobLocation} onChange={setJobLocation} />
+        {/* 3. Agent loop — right column, stays in view while scrolling results */}
+        <section
+          className="area-agent panel overflow-hidden lg:sticky lg:top-[5.25rem] lg:max-h-[calc(100dvh-6.5rem)] lg:overflow-y-auto"
+          aria-labelledby="agent-title"
+          aria-live="polite"
+        >
+          <AgentPanel
+            hasSearched={hasSearched}
+            isSearching={isSearching}
+            isExplaining={isExplaining}
+            jobSource={jobSource}
+            freeHours={freeHours}
+            classBlocks={schedule.length}
+            sourceMessage={sourceMessage}
+            foundCount={foundCount}
+            outcome={outcome}
+            elapsedMs={elapsedMs}
+            explanation={explanation}
+          />
+        </section>
 
-                <div className="grid gap-3 sm:grid-cols-3">
-                  <NumberInput label="บาท/ชม. ขั้นต่ำ" value={profile.minWage} min={0} onChange={(value) => setProfile({ ...profile, minWage: value })} />
-                  <NumberInput label="ระยะทางสูงสุด" value={profile.maxDistance} min={0} step={0.5} onChange={(value) => setProfile({ ...profile, maxDistance: value })} />
-                  <NumberInput label="ชม./สัปดาห์" value={profile.maxHours} min={1} onChange={(value) => setProfile({ ...profile, maxHours: value })} />
-                </div>
-              </div>
-            </section>
-
-            <section className="surface-card rounded-3xl p-5">
-              <div className="mb-4 flex items-start justify-between gap-3">
-                <div>
-                  <div className="flex items-center gap-3">
-                    <span className="step-number">02</span>
-                    <div>
-                      <h2 className="text-lg font-black text-slate-950">เพิ่มตารางเรียน</h2>
-                      <p className="text-sm text-slate-500">Agent จะเตือนเมื่องานอาจชนเวลาเรียน</p>
-                    </div>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setSchedule((blocks) => [...blocks, { id: Date.now(), day: "Thursday", start: "09:00", end: "12:00" }])}
-                  className="rounded-full border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700 shadow-sm transition hover:border-teal-300 hover:text-teal-700"
-                >
-                  + เพิ่ม
-                </button>
-              </div>
-
-              <div className="grid gap-3">
-                {schedule.map((block) => (
-                  <div key={block.id} className="grid grid-cols-[1fr_1fr_1fr_auto] gap-2">
-                    <select value={block.day} onChange={(event) => updateSchedule(block.id, "day", event.target.value)} className="min-w-0 rounded-xl border border-slate-200 px-2 py-2 text-sm outline-none focus:border-teal-500" aria-label="Class day">
-                      {days.map((day) => <option key={day} value={day}>{day}</option>)}
-                    </select>
-                    <input type="time" value={block.start} onChange={(event) => updateSchedule(block.id, "start", event.target.value)} className="min-w-0 rounded-xl border border-slate-200 px-2 py-2 text-sm outline-none focus:border-teal-500" aria-label="Class start time" />
-                    <input type="time" value={block.end} onChange={(event) => updateSchedule(block.id, "end", event.target.value)} className="min-w-0 rounded-xl border border-slate-200 px-2 py-2 text-sm outline-none focus:border-teal-500" aria-label="Class end time" />
-                    <button type="button" onClick={() => setSchedule((blocks) => blocks.filter((item) => item.id !== block.id))} className="h-10 w-10 rounded-xl border border-slate-200 text-slate-500 transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700" aria-label="Remove class block">×</button>
-                  </div>
-                ))}
-              </div>
-
-              <button type="button" onClick={runSearch} disabled={isSearching || isExplaining} className="group mt-5 flex w-full items-center justify-center gap-2 rounded-2xl bg-[linear-gradient(110deg,#0f766e,#0d9488)] px-4 py-3.5 text-base font-black text-white shadow-[0_12px_28px_-12px_rgba(13,148,136,0.85)] transition hover:-translate-y-0.5 hover:shadow-[0_16px_32px_-12px_rgba(13,148,136,0.9)] focus:outline-none focus:ring-4 focus:ring-teal-200 disabled:cursor-wait disabled:opacity-60">
-                <span className={isSearching || isExplaining ? "animate-pulse" : "transition group-hover:rotate-12"}>✦</span>
-                {isSearching ? "Agent กำลังค้นหางาน..." : isExplaining ? "Agent กำลังสรุปผล..." : "ให้ Agent เริ่มค้นหา"}
-              </button>
-            </section>
-          </aside>
-
-          {/* Keyboard users need to focus this independently scrolling region. */}
-          {/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex */}
-          <div role="region" aria-label="ผลการค้นหางาน" tabIndex={0} className="app-scrollbar min-w-0 space-y-6 rounded-2xl focus-visible:outline-2 focus-visible:outline-teal-600 lg:min-h-0 lg:overflow-y-auto lg:overscroll-contain lg:[scrollbar-gutter:stable]">
-            <section className="overflow-hidden rounded-3xl border border-slate-800 bg-slate-950 p-5 text-white shadow-[0_18px_45px_-26px_rgba(15,23,42,0.8)]">
-              <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="grid h-10 w-10 place-items-center rounded-2xl bg-teal-400/10 text-xl text-teal-300">✦</div>
-                  <div>
-                    <h2 className="text-lg font-black">Agent activity</h2>
-                    <p className="text-sm text-slate-400">สถานะการวิเคราะห์และค้นหางาน</p>
-                  </div>
-                </div>
-                <span className="w-fit rounded-full border border-teal-400/20 bg-teal-400/10 px-3 py-1 text-xs font-black text-teal-200">AI + rule-based scoring</span>
-              </div>
-              <AgentFlow
-                hasSearched={hasSearched}
-                isSearching={isSearching}
-                isExplaining={isExplaining}
-                jobSource={jobSource}
-                jobQuery={jobQuery}
-                jobLocation={jobLocation}
-                searchPlanMessage={searchPlanMessage}
-                sourceMessage={sourceMessage}
-                liveJobCount={liveJobCount}
-                resultCount={results.length}
-                hasAiExplanation={Boolean(aiExplanation)}
-              />
-              <div className={`mt-4 rounded-xl px-4 py-3 text-sm font-bold ${
-                  jobSource === "live"
-                  ? "border border-emerald-400/20 bg-emerald-400/10 text-emerald-200"
-                  : jobSource === "empty-live"
-                    ? "border border-sky-400/20 bg-sky-400/10 text-sky-200"
-                  : jobSource === "error"
-                    ? "border border-rose-400/20 bg-rose-400/10 text-rose-200"
-                    : "border border-white/10 bg-white/5 text-slate-300"
-              }`}>
-                {sourceMessage}
-              </div>
-              {searchPlanMessage && <p className="mt-3 break-words text-sm leading-6 text-teal-200" role="status">{searchPlanMessage}</p>}
-              <p className="mt-4 rounded-2xl border border-white/10 bg-white/[0.04] p-4 text-sm leading-6 text-slate-300">
-                {!hasSearched
-                  ? "กรอกข้อมูลแล้วเริ่มค้นหา Agent จะเลือกคำค้น ตรวจงานที่น่าสงสัย เช็กเวลาเรียน และจัดอันดับงานที่เหมาะที่สุดให้"
-                  : isExplaining
-                    ? "ระบบคำนวณผลลัพธ์เสร็จแล้ว กำลังให้ Gemini ช่วยเรียบเรียงคำอธิบาย..."
-                    : explanation}
-              </p>
-            </section>
-
-            <section className="surface-card rounded-3xl p-5">
-              <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-                <div>
-                  <h2 className="text-lg font-black text-slate-950">งานที่แนะนำ</h2>
-                  <p className="text-sm text-slate-500">เรียงจากคะแนนความเหมาะสมสูงสุด</p>
-                </div>
-                {hasSearched && !isSearching ? (
-                  <div className="text-sm font-bold text-slate-600">
-                    {results.some((result) => result.isRelaxed) ? `${results.length} งานพร้อมข้อควรเช็ก` : `${results.length} งานที่เหมาะมาก`}
-                  </div>
-                ) : null}
-              </div>
-
-              {!hasSearched ? (
-                <EmptyState />
-              ) : isSearching ? (
-                <LoadingState />
-              ) : jobSource === "error" ? (
-                <ErrorState message={sourceMessage} />
-              ) : results.length === 0 ? (
-                <NoResults suggestions={suggestions} message={sourceMessage} />
-              ) : (
-                <div className="grid gap-4">
-                  {results.map((result) => <JobCard key={result.job.id} result={result} />)}
-                </div>
-              )}
-            </section>
+        {/* 4. Results */}
+        <div className="area-results grid gap-4">
+        <section className="@container panel p-4 sm:p-5" aria-labelledby="results-title">
+          <SectionHead
+            step="4"
+            id="results-title"
+            title="งานที่แนะนำ"
+            sub="เรียงจากเหมาะที่สุด กดที่แถวเพื่อดูเหตุผลและเวลางานเทียบกับตารางเรียน"
+            right={
+              outcome && results.length ? (
+                <span className="text-sm font-semibold text-muted">
+                  ตรงเกณฑ์ {matchCount} · ทั้งหมด {results.length}
+                </span>
+              ) : null
+            }
+          />
+          <div className="mt-4">
+            {!hasSearched ? (
+              <EmptyStart />
+            ) : isSearching ? (
+              <LoadingRows />
+            ) : jobSource === "error" ? (
+              <Notice tone="bad" title="ค้นหาไม่สำเร็จ">{sourceMessage}</Notice>
+            ) : !results.length ? (
+              <Notice tone="warn" title="ยังไม่พบงานที่ไม่ชนคาบเรียน">
+                <ul className="mt-1 grid gap-1">
+                  {getSuggestions(jobQuery, locationName).map((tip) => <li key={tip}>• {tip}</li>)}
+                </ul>
+              </Notice>
+            ) : (
+              <ResultsTable results={results} schedule={schedule} openId={openId} onToggle={(id) => setOpenId(openId === id ? null : id)} />
+            )}
           </div>
         </section>
-      </div>
-    </main>
+
+        <p className="pb-4 text-center text-xs text-faint">
+          ตรวจสอบรายละเอียดกับนายจ้างทุกครั้งก่อนเริ่มงาน และอย่าโอนเงินค่าสมัครใด ๆ
+        </p>
+        </div>
+      </main>
+    </div>
   );
 }
 
-function AgentFlow({
+/* ---------- Agent panel ---------- */
+
+type StepState = "pending" | "running" | "done" | "error";
+type StepName = "Think" | "Act" | "Observe" | "Repeat";
+
+function AgentPanel({
   hasSearched,
   isSearching,
   isExplaining,
   jobSource,
-  jobQuery,
-  jobLocation,
-  searchPlanMessage,
+  freeHours,
+  classBlocks,
   sourceMessage,
-  liveJobCount,
-  resultCount,
-  hasAiExplanation,
+  foundCount,
+  outcome,
+  elapsedMs,
+  explanation,
 }: {
   hasSearched: boolean;
   isSearching: boolean;
   isExplaining: boolean;
   jobSource: JobSource;
-  jobQuery: string;
-  jobLocation: string;
-  searchPlanMessage: string;
+  freeHours: number;
+  classBlocks: number;
   sourceMessage: string;
-  liveJobCount: number;
-  resultCount: number;
-  hasAiExplanation: boolean;
+  foundCount: number;
+  outcome: SearchOutcome | null;
+  elapsedMs: number | null;
+  explanation: string;
 }) {
-  type ActionState = "pending" | "running" | "done" | "error";
-  const searchFinished = jobSource === "live" || jobSource === "empty-live";
-  const steps: Array<{ title: string; detail: string; state: ActionState }> = [
+  const matched = outcome?.results.filter((result) => result.tier === "match").length ?? 0;
+  const failed = jobSource === "error";
+  const working = isSearching || isExplaining;
+
+  const steps: Array<{ name: StepName; thai: string; detail: React.ReactNode; state: StepState }> = [
     {
-      title: "รับโจทย์จากคุณ",
-      detail: `${jobQuery || "ยังไม่ได้ระบุตำแหน่ง"} · ${jobLocation || "ยังไม่ได้ระบุพื้นที่"}`,
+      name: "Think",
+      thai: "คิด",
+      detail: hasSearched
+        ? `อ่านตารางเรียน ${classBlocks} ช่วง ว่าง ${freeHours} ชม./สัปดาห์`
+        : "รอข้อมูลตารางเรียนและงานที่อยากได้",
       state: hasSearched ? "done" : "pending",
     },
     {
-      title: "วางแผนคำค้น",
-      detail: searchPlanMessage || (isSearching ? "กำลังสร้างคำค้นไทยและอังกฤษของตำแหน่งเดียวกัน" : "รอเริ่มค้นหา"),
-      state: searchPlanMessage || (hasSearched && !isSearching) ? "done" : isSearching ? "running" : "pending",
+      name: "Act",
+      thai: "ค้นหา",
+      detail: hasSearched ? sourceMessage : "ค้นหางานตามที่คุณต้องการ",
+      state: !hasSearched ? "pending" : failed ? "error" : isSearching ? "running" : "done",
     },
     {
-      title: "ค้นหาตำแหน่งงานจริง",
-      detail: jobSource === "error" ? sourceMessage : searchFinished ? `ได้รับข้อมูล ${liveJobCount} รายการจากแหล่งงาน` : isSearching ? "กำลังเชื่อมต่อและค้นหาตามพื้นที่" : "รอคำค้นจาก Agent",
-      state: jobSource === "error" ? "error" : searchFinished ? "done" : isSearching ? "running" : "pending",
+      name: "Observe",
+      thai: "ตรวจ",
+      detail: outcome ? (
+        <span className="mt-1 flex flex-wrap gap-1.5">
+          <Chip tone="neutral">พบ {foundCount}</Chip>
+          <Chip tone="bad">ชนคาบเรียน −{outcome.excludedConflicts}</Chip>
+          <Chip tone="warn">น่าสงสัย −{outcome.excludedSuspicious}</Chip>
+          <Chip tone="good">ตรงเกณฑ์ {matched}</Chip>
+        </span>
+      ) : (
+        "ตรวจเวลาชนคาบ งานน่าสงสัย และเกณฑ์ที่ตั้งไว้"
+      ),
+      state: outcome ? "done" : "pending",
     },
     {
-      title: "ตรวจและจัดอันดับงาน",
-      detail: searchFinished ? `คัดกรองงานน่าสงสัย ตรวจตารางเรียน และจัดอันดับ ${resultCount} รายการ` : "รอข้อมูลตำแหน่งงาน",
-      state: searchFinished ? "done" : "pending",
-    },
-    {
-      title: "เรียบเรียงคำแนะนำ",
-      detail: isExplaining ? "Gemini กำลังสรุปเหตุผลและข้อควรเช็ก" : hasAiExplanation ? "Gemini สรุปคำแนะนำเสร็จแล้ว" : searchFinished ? "ใช้คำอธิบายจากผลการจัดอันดับ" : "รอผลการวิเคราะห์",
-      state: isExplaining ? "running" : searchFinished ? "done" : "pending",
+      name: "Repeat",
+      thai: "ปรับ",
+      detail: outcome ? (
+        outcome.relaxNote ? (
+          <span className="mt-1 block rounded-lg bg-accent-soft px-2.5 py-1.5 text-accent-strong">{outcome.relaxNote}</span>
+        ) : matched >= 5 ? (
+          "เจองานตรงเกณฑ์พอแล้ว ไม่ต้องผ่อนเกณฑ์"
+        ) : (
+          "ไม่ได้ตั้งค่าจ้าง/ระยะทาง จึงไม่มีเกณฑ์ให้ผ่อน"
+        )
+      ) : (
+        "ถ้าได้น้อยกว่า 5 งาน จะขยายระยะทางและลดค่าจ้างขั้นต่ำ"
+      ),
+      state: outcome ? "done" : "pending",
     },
   ];
 
+  const doneCount = steps.filter((step) => step.state === "done").length;
+  const progress = failed ? 100 : (doneCount / steps.length) * 100;
+  const status = failed
+    ? { label: "มีปัญหา", dot: "bg-bad", pill: "bg-bad/20 text-[#ffb4ab]", pulse: false }
+    : isSearching
+      ? { label: "กำลังค้นหา", dot: "bg-highlight", pill: "bg-highlight/15 text-highlight", pulse: true }
+      : isExplaining
+        ? { label: "กำลังสรุปผล", dot: "bg-highlight", pill: "bg-highlight/15 text-highlight", pulse: true }
+        : hasSearched
+          ? {
+              label: `เสร็จแล้ว${elapsedMs !== null ? ` · ${(elapsedMs / 1000).toFixed(1)} วิ` : ""}`,
+              dot: "bg-job",
+              pill: "bg-job/20 text-[#86efac]",
+              pulse: false,
+            }
+          : { label: "พร้อมทำงาน", dot: "bg-white/60", pill: "bg-white/10 text-white/80", pulse: false };
+
   return (
-    <ol className="app-scrollbar mt-6 flex overflow-x-auto pb-3" aria-live="polite" aria-label="ขั้นตอนการทำงานของ Agent">
-      {steps.map((step, index) => (
-        <li key={step.title} className="relative min-w-36 flex-1 px-2 text-center first:pl-0 last:pr-0">
-          {index < steps.length - 1 ? (
-            <span className={`absolute left-1/2 top-4 h-0.5 w-full ${step.state === "done" ? "bg-teal-300" : step.state === "error" ? "bg-rose-300/60" : "bg-slate-700"}`} aria-hidden="true" />
-          ) : null}
-          <span className="relative z-10 mx-auto block h-8 w-8 rounded-full bg-slate-950 shadow-[0_0_0_5px_#020617]">
-            {step.state === "running" ? (
-              <>
-                <span className="absolute inset-0 animate-spin rounded-full border-2 border-teal-300/20 border-r-teal-300 border-t-teal-300" aria-hidden="true" />
-                <span className="absolute inset-[9px] rounded-full bg-teal-200 shadow-[0_0_10px_rgba(94,234,212,0.85)]" aria-hidden="true" />
-                <span className="sr-only">กำลังทำงาน</span>
-              </>
-            ) : (
-              <span className={`grid h-full w-full place-items-center rounded-full border text-xs font-black ${
-                step.state === "done"
-                  ? "border-teal-300 bg-teal-300 text-slate-950"
-                  : step.state === "error"
-                    ? "border-rose-300 bg-rose-300 text-rose-950"
-                    : "border-slate-600 bg-slate-950 text-slate-500"
-              }`}>{step.state === "done" ? "✓" : step.state === "error" ? "!" : index + 1}</span>
-            )}
+    <>
+      {/* Header bar */}
+      <div className="bg-topbar px-4 pb-4 pt-4 text-white sm:px-5">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <span className="bg-brand relative grid h-10 w-10 shrink-0 place-items-center rounded-xl ring-1 ring-white/20">
+              <Icon name="spark" className="h-5 w-5" />
+              {working ? (
+                <span className="absolute -right-0.5 -top-0.5 h-3 w-3 animate-ping rounded-full bg-highlight" aria-hidden="true" />
+              ) : null}
+            </span>
+            <div>
+              <h2 id="agent-title" className="font-bold leading-6">
+                Agent กำลังทำอะไร
+              </h2>
+              <p className="text-xs text-white/60">Think → Act → Observe → Repeat</p>
+            </div>
+          </div>
+        </div>
+        <div className="mt-4 flex items-center justify-between gap-3">
+          <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${status.pill}`}>
+            <span className={`h-1.5 w-1.5 rounded-full ${status.dot} ${status.pulse ? "animate-pulse" : ""}`} aria-hidden="true" />
+            {status.label}
           </span>
-          <p className={`mt-3 text-xs font-black ${step.state === "pending" ? "text-slate-500" : "text-slate-200"}`}>{step.title}</p>
-          <p className="mx-auto mt-1 max-w-40 text-xs leading-5 text-slate-500">{step.detail}</p>
-          {step.state === "running" ? <span className="mt-1 inline-block text-xs font-bold text-teal-300">กำลังทำงาน...</span> : null}
-          {step.state === "error" ? <span className="mt-1 inline-block text-xs font-bold text-rose-300">เกิดข้อผิดพลาด</span> : null}
-        </li>
-      ))}
-    </ol>
+          <span className="text-xs tabular-nums text-white/60">
+            {doneCount}/{steps.length} ขั้น
+          </span>
+        </div>
+        <div
+          className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10"
+          role="progressbar"
+          aria-label="ความคืบหน้าของ Agent"
+          aria-valuemin={0}
+          aria-valuemax={steps.length}
+          aria-valuenow={doneCount}
+        >
+          <div
+            className={`h-full rounded-full transition-[width] duration-500 ease-out ${failed ? "bg-bad" : working ? "bg-highlight" : "bg-job"}`}
+            style={{ width: `${Math.max(progress, working ? 12 : 0)}%` }}
+          />
+        </div>
+      </div>
+
+      {/* Steps */}
+      <ol className="px-4 pt-4 sm:px-5">
+        {steps.map((step, index) => (
+          <li key={step.name} className="relative grid grid-cols-[2.25rem_minmax(0,1fr)] gap-x-3 pb-4 last:pb-0">
+            {index < steps.length - 1 ? (
+              <span
+                className={`absolute bottom-0 left-[1.06rem] top-10 w-0.5 rounded-full ${step.state === "done" ? "bg-accent" : "bg-line"}`}
+                aria-hidden="true"
+              />
+            ) : null}
+            <StepIcon name={step.name} state={step.state} />
+            <div
+              className={`min-w-0 rounded-xl px-3 py-2 transition ${
+                step.state === "running"
+                  ? "bg-accent-soft ring-1 ring-accent/40"
+                  : step.state === "error"
+                    ? "bg-bad-soft ring-1 ring-bad/40"
+                    : ""
+              }`}
+            >
+              <div className="flex items-baseline gap-2">
+                <span className={`font-bold ${step.state === "pending" ? "text-faint" : ""}`}>{step.name}</span>
+                <span className="text-sm text-muted">· {step.thai}</span>
+                {step.state === "running" ? (
+                  <span className="ml-auto text-xs font-semibold text-accent">
+                    กำลังทำงาน<span className="animate-pulse">…</span>
+                  </span>
+                ) : null}
+              </div>
+              <div className={`mt-0.5 break-words text-sm leading-6 ${step.state === "pending" ? "text-faint" : "text-muted"}`}>
+                {step.detail}
+              </div>
+            </div>
+          </li>
+        ))}
+      </ol>
+
+      {/* Advice */}
+      <div className="p-4 sm:p-5">
+        {hasSearched && !isSearching && !failed ? (
+          <div className="rounded-xl border border-accent/20 bg-accent-soft/60 p-4">
+            <div className="mb-2 flex items-center gap-2 text-sm font-bold text-accent-strong">
+              <span className="grid h-6 w-6 place-items-center rounded-full bg-accent text-white">
+                <Icon name="spark" className="h-3.5 w-3.5" />
+              </span>
+              {isExplaining ? "กำลังสรุปคำแนะนำ…" : "คำแนะนำ"}
+            </div>
+            {isExplaining ? (
+              <div className="grid gap-2" aria-hidden="true">
+                <span className="h-3 w-full animate-pulse rounded bg-accent/15" />
+                <span className="h-3 w-11/12 animate-pulse rounded bg-accent/15" />
+                <span className="h-3 w-3/4 animate-pulse rounded bg-accent/15" />
+              </div>
+            ) : (
+              <p className="text-sm leading-7 text-ink">{explanation}</p>
+            )}
+          </div>
+        ) : (
+          <div className="rounded-xl border border-dashed border-line-strong p-4 text-center text-sm text-faint">
+            {failed ? "แก้ปัญหาแล้วลองกดค้นหาอีกครั้ง" : "คำแนะนำจะแสดงที่นี่หลังค้นหาเสร็จ"}
+          </div>
+        )}
+      </div>
+    </>
   );
 }
 
-function StatCard({ value, label }: { value: number; label: string }) {
+function StepIcon({ name, state }: { name: StepName; state: StepState }) {
+  const iconName: Record<StepName, IconName> = { Think: "bulb", Act: "search", Observe: "eye", Repeat: "repeat" };
+  const style =
+    state === "done"
+      ? "bg-accent text-white"
+      : state === "running"
+        ? "bg-accent-soft text-accent"
+        : state === "error"
+          ? "bg-bad-soft text-bad"
+          : "bg-sunken text-faint ring-1 ring-line";
   return (
-    <div className="min-w-24 rounded-2xl border border-white/10 bg-white/[0.07] px-4 py-2.5 backdrop-blur-sm">
-      <div className="text-2xl font-black text-white">{value}</div>
-      <div className="text-xs font-semibold text-slate-300">{label}</div>
+    <span className={`relative z-10 grid h-9 w-9 place-items-center rounded-full ${style}`}>
+      <Icon name={iconName[name]} className="h-[18px] w-[18px]" />
+      {state === "running" ? (
+        <span className="absolute -inset-1 animate-spin rounded-full border-2 border-accent/15 border-t-accent" aria-hidden="true" />
+      ) : null}
+      {state === "done" ? (
+        <span className="absolute -bottom-0.5 -right-0.5 grid h-4 w-4 place-items-center rounded-full bg-job text-white ring-2 ring-surface">
+          <Icon name="check" className="h-2.5 w-2.5" />
+        </span>
+      ) : null}
+      {state === "error" ? (
+        <span className="absolute -bottom-0.5 -right-0.5 grid h-4 w-4 place-items-center rounded-full bg-bad text-[10px] font-bold text-white ring-2 ring-surface">
+          !
+        </span>
+      ) : null}
+      <span className="sr-only">
+        {state === "done" ? "เสร็จแล้ว" : state === "running" ? "กำลังทำงาน" : state === "error" ? "มีปัญหา" : "รอ"}
+      </span>
+    </span>
+  );
+}
+
+function Chip({ tone, children }: { tone: "neutral" | "good" | "warn" | "bad"; children: React.ReactNode }) {
+  const style = {
+    neutral: "bg-class-soft text-ink",
+    good: "bg-good-soft text-good",
+    warn: "bg-warn-soft text-warn",
+    bad: "bg-bad-soft text-bad",
+  }[tone];
+  return <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${style}`}>{children}</span>;
+}
+
+type IconName = "bulb" | "search" | "eye" | "repeat" | "spark" | "check";
+
+function Icon({ name, className }: { name: IconName; className?: string }) {
+  const paths: Record<IconName, React.ReactNode> = {
+    bulb: (
+      <>
+        <path d="M9 18h6M10 21h4" />
+        <path d="M12 3a6 6 0 0 0-3.5 10.9c.6.4 1 1.1 1 1.9V16h5v-.2c0-.8.4-1.5 1-1.9A6 6 0 0 0 12 3z" />
+      </>
+    ),
+    search: (
+      <>
+        <circle cx="11" cy="11" r="6.5" />
+        <path d="m20 20-4.2-4.2" />
+      </>
+    ),
+    eye: (
+      <>
+        <path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z" />
+        <circle cx="12" cy="12" r="2.8" />
+      </>
+    ),
+    repeat: (
+      <>
+        <path d="M20 12a8 8 0 1 1-2.3-5.6L20 8.5" />
+        <path d="M20 3.5v5h-5" />
+      </>
+    ),
+    spark: <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9zM18.5 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z" />,
+    check: <path d="m5 12.5 4.5 4.5L19 7.5" />,
+  };
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={name === "check" ? 3.2 : 2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      {paths[name]}
+    </svg>
+  );
+}
+
+/* ---------- Results ---------- */
+
+function ResultsTable({
+  results,
+  schedule,
+  openId,
+  onToggle,
+}: {
+  results: MatchResult[];
+  schedule: ScheduleBlock[];
+  openId: number | null;
+  onToggle: (id: number) => void;
+}) {
+  return (
+    <div className="grid gap-6">
+      {tierOrder.map((tier) => {
+        const group = results.filter((result) => result.tier === tier);
+        if (!group.length) return null;
+        return (
+          <div key={tier}>
+            <div className="mb-2 flex flex-wrap items-baseline gap-x-2">
+              <h3 className="font-bold">{tierInfo[tier].title}</h3>
+              <span className="text-sm text-muted">{group.length} งาน · {tierInfo[tier].hint}</span>
+            </div>
+            <div className="overflow-hidden rounded-xl border border-line">
+              <div className="hidden grid-cols-[3rem_minmax(0,2.2fr)_minmax(0,1.7fr)_6.5rem_minmax(0,1.3fr)_6.5rem] gap-3 border-b border-line bg-sunken px-4 py-2 text-xs font-semibold text-muted @3xl:grid">
+                <span>คะแนน</span>
+                <span>ตำแหน่ง</span>
+                <span>วัน-เวลา</span>
+                <span>ค่าจ้าง</span>
+                <span>สถานที่</span>
+                <span>สถานะ</span>
+              </div>
+              <div className="divide-y divide-line">
+                {group.map((result) => {
+                  return (
+                    <JobRow
+                      key={result.job.id}
+                      rank={results.indexOf(result) + 1}
+                      result={result}
+                      schedule={schedule}
+                      open={openId === result.job.id}
+                      onToggle={() => onToggle(result.job.id)}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
 
-function TextInput({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
-  return (
-    <label className="grid gap-1 text-sm font-semibold text-slate-700">
-      {label}
-      <input value={value} onChange={(event) => onChange(event.target.value)} className="field-control" />
-    </label>
-  );
-}
-
-function NumberInput({ label, value, min, step, onChange }: { label: string; value: number | ""; min: number; step?: number; onChange: (value: number | "") => void }) {
-  return (
-    <label className="grid min-w-0 gap-1 text-sm font-semibold text-slate-700">
-      {label}
-      <input type="number" min={min} step={step} value={value} placeholder="กรอกค่า" onChange={(event) => onChange(event.target.value === "" ? "" : Number(event.target.value))} className="field-control min-w-0 max-w-full" />
-    </label>
-  );
-}
-
-function OptionGroup({ title, options, selected, onToggle }: { title: string; options: string[]; selected: string[]; onToggle: (value: string) => void }) {
+function JobRow({
+  rank,
+  result,
+  schedule,
+  open,
+  onToggle,
+}: {
+  rank: number;
+  result: MatchResult;
+  schedule: ScheduleBlock[];
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const { job } = result;
+  const info = tierInfo[result.tier];
+  const panelId = `job-${job.id}`;
   return (
     <div>
-      <div className="mb-2 text-sm font-semibold text-slate-700">{title}</div>
-      <div className="flex flex-wrap gap-2">
-        {options.map((option) => <TogglePill key={option} label={option} active={selected.includes(option)} onClick={() => onToggle(option)} />)}
-      </div>
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        aria-controls={panelId}
+        className={`grid w-full grid-cols-[3rem_minmax(0,1fr)] gap-x-3 gap-y-1 px-4 py-3 text-left transition hover:bg-sunken @3xl:grid-cols-[3rem_minmax(0,2.2fr)_minmax(0,1.7fr)_6.5rem_minmax(0,1.3fr)_6.5rem] @3xl:items-center ${open ? "bg-sunken" : ""}`}
+      >
+        <span className="row-span-5 @3xl:row-span-1">
+          <span className="block text-xl font-bold leading-none">{result.score}</span>
+          <span className="text-[11px] text-faint">#{rank}</span>
+        </span>
+        <span className="min-w-0">
+          <span className="block truncate font-semibold">{job.title}</span>
+          <span className="block truncate text-sm text-muted">
+            {job.company}
+            {job.source === "demo" ? " · ตัวอย่าง" : ""}
+          </span>
+        </span>
+        <span className={`text-sm ${job.shifts.length ? "" : "text-warn"}`}>{formatShiftsThai(job.shifts)}</span>
+        <span className={`text-sm font-semibold ${job.wage === null ? "text-warn" : ""}`}>{formatWage(job.wage)}</span>
+        <span className="min-w-0 text-sm text-muted">
+          <span className="block truncate">{job.location ?? "-"}</span>
+          <span className={job.distance === null ? "text-warn" : ""}>{formatDistance(job.distance)}</span>
+        </span>
+        <span>
+          <span className={`inline-block rounded-full px-2.5 py-1 text-xs font-semibold ${info.pillClass}`}>{info.pill}</span>
+        </span>
+      </button>
+
+      {open ? (
+        <div id={panelId} className="grid gap-5 border-t border-line bg-surface px-4 py-4 @3xl:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
+          <div className="grid content-start gap-4">
+            <div>
+              <h4 className="text-sm font-bold">ทำไมถึงแนะนำ</h4>
+              <ul className="mt-1.5 grid gap-1 text-sm leading-6 text-muted">
+                {result.reasons.slice(0, 4).map((reason) => <li key={reason}>✓ {reason}</li>)}
+              </ul>
+            </div>
+            {result.warnings.length ? (
+              <div className="rounded-lg bg-warn-soft p-3">
+                <h4 className="text-sm font-bold text-warn">ควรเช็กก่อนสมัคร</h4>
+                <ul className="mt-1 grid gap-1 text-sm leading-6 text-warn">
+                  {result.warnings.map((warning) => <li key={warning}>! {warning}</li>)}
+                </ul>
+              </div>
+            ) : null}
+            <ScoreBars result={result} />
+            {job.source === "demo" ? (
+              <span className="w-fit rounded-lg bg-class-soft px-4 py-2.5 text-sm font-semibold text-muted">งานตัวอย่าง ไม่มีลิงก์สมัคร</span>
+            ) : (
+              <a
+                href={job.applyUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="w-fit rounded-lg bg-ink px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-class"
+              >
+                ดูประกาศและสมัคร ↗
+              </a>
+            )}
+          </div>
+          <MiniWeek schedule={schedule} shifts={job.shifts} />
+        </div>
+      ) : null}
     </div>
   );
 }
 
-function EmptyState() {
+function ScoreBars({ result }: { result: MatchResult }) {
+  const parts = [
+    { label: "ทักษะ", value: result.skillScore, max: 35 },
+    { label: "ชั่วโมง", value: result.timeScore, max: 25 },
+    { label: "ค่าจ้าง", value: result.wageScore, max: 20 },
+    { label: "ระยะทาง", value: result.distanceScore, max: 20 },
+  ];
   return (
-    <div className="grid min-h-80 place-items-center rounded-3xl border border-dashed border-teal-200 bg-[radial-gradient(circle_at_50%_25%,rgba(45,212,191,0.12),transparent_40%)] px-6 text-center">
-      <div>
-        <div className="mx-auto mb-4 grid h-16 w-16 place-items-center rounded-3xl border border-teal-200 bg-white text-2xl text-teal-700 shadow-[0_12px_30px_-16px_rgba(13,148,136,0.8)]">✦</div>
-        <h3 className="text-lg font-black text-slate-950">พร้อมค้นหางานแรกของคุณ</h3>
-        <p className="mt-2 max-w-md text-sm leading-6 text-slate-500">
-          ระบบจะค้นหาตำแหน่งงานก่อน แล้วค่อยจัดอันดับพร้อมเตือนเรื่องตารางเรียน ค่าจ้าง ระยะทาง และชั่วโมงทำงาน
-        </p>
-      </div>
-    </div>
-  );
-}
-
-function LoadingState() {
-  return (
-    <div className="grid min-h-80 place-items-center rounded-2xl bg-slate-50 px-6 text-center">
-      <div>
-        <div className="mx-auto h-12 w-12 animate-spin rounded-full border-4 border-teal-100 border-t-teal-600" />
-        <p className="mt-4 text-sm font-bold text-slate-600">กำลังตรวจตารางเรียนและให้คะแนนงาน...</p>
-      </div>
-    </div>
-  );
-}
-
-function NoResults({ suggestions, message }: { suggestions: string[]; message: string }) {
-  return (
-    <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5">
-      <h3 className="text-lg font-black text-amber-950">ยังไม่พบตำแหน่งงานจากคำค้นนี้</h3>
-      <p className="mt-2 text-sm leading-6 text-amber-900">
-        {message}
-      </p>
-      <div className="mt-4 grid gap-2">
-        {(suggestions.length ? suggestions : ["ลองใช้ชื่อเรียกอื่นของตำแหน่งงานเดิม หรือระบุพื้นที่ให้ชัดขึ้น"]).map((suggestion) => (
-          <div key={suggestion} className="rounded-xl bg-white px-4 py-3 text-sm font-semibold text-amber-900">{suggestion}</div>
+    <div>
+      <h4 className="text-sm font-bold">คะแนน {result.score}/100</h4>
+      <div className="mt-2 grid gap-1.5">
+        {parts.map((part) => (
+          <div key={part.label} className="grid grid-cols-[4rem_minmax(0,1fr)_3rem] items-center gap-2 text-xs text-muted">
+            <span>{part.label}</span>
+            <span className="h-1.5 overflow-hidden rounded-full bg-class-soft">
+              <span className="block h-full rounded-full bg-class" style={{ width: `${(part.value / part.max) * 100}%` }} />
+            </span>
+            <span className="text-right tabular-nums">{part.value}/{part.max}</span>
+          </div>
         ))}
       </div>
     </div>
   );
 }
 
-function ErrorState({ message }: { message: string }) {
+/** Each day as a 07–22 timeline: class blocks in navy, this job's shifts in emerald. */
+function MiniWeek({ schedule, shifts }: { schedule: ScheduleBlock[]; shifts: Shift[] }) {
+  const span = GRID_END - GRID_START;
+  const bar = (start: string, end: string) => {
+    const from = Math.max(GRID_START, timeToMinutes(start));
+    const to = Math.min(GRID_END, timeToMinutes(end));
+    return { left: `${((from - GRID_START) / span) * 100}%`, width: `${(Math.max(0, to - from) / span) * 100}%` };
+  };
   return (
-    <div className="rounded-2xl border border-rose-200 bg-rose-50 p-5">
-      <h3 className="text-lg font-black text-rose-950">เกิดข้อผิดพลาดในการค้นหา</h3>
-      <p className="mt-2 text-sm leading-6 text-rose-900">{message}</p>
+    <div>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h4 className="text-sm font-bold">เวลางานเทียบตารางเรียน</h4>
+        <div className="flex gap-3 text-xs text-muted">
+          <Legend swatch="bg-class" label="เรียน" />
+          <Legend swatch="bg-job" label="งานนี้" />
+        </div>
+      </div>
+      {!shifts.length ? (
+        <p className="mt-2 rounded-lg bg-warn-soft p-3 text-sm text-warn">
+          ประกาศนี้ไม่ระบุวัน-เวลาทำงาน จึงยังแสดงเทียบไม่ได้ ถามนายจ้างก่อนว่าเวลาไม่ชนคาบเรียน
+        </p>
+      ) : null}
+      <div className="mt-2 grid gap-1">
+        {days.map((day) => (
+          <div key={day} className="grid grid-cols-[2rem_minmax(0,1fr)] items-center gap-2">
+            <span className="text-xs text-muted">{dayShort[day]}</span>
+            <span className="relative h-5 rounded bg-sunken ring-1 ring-line">
+              {schedule.filter((block) => block.day === day).map((block) => (
+                <span key={`c-${block.id}`} className="absolute inset-y-0 rounded bg-class" style={bar(block.start, block.end)} />
+              ))}
+              {shifts.filter((shift) => shift.day === day).map((shift) => (
+                <span
+                  key={`s-${shift.start}`}
+                  className="absolute inset-y-0.5 rounded bg-job"
+                  style={bar(shift.start, shift.end)}
+                  title={`${shift.start}–${shift.end}`}
+                />
+              ))}
+            </span>
+          </div>
+        ))}
+        <div className="grid grid-cols-[2rem_minmax(0,1fr)] gap-2 text-[11px] text-faint">
+          <span />
+          <span className="flex justify-between">
+            <span>07</span>
+            <span>12</span>
+            <span>17</span>
+            <span>22</span>
+          </span>
+        </div>
+      </div>
     </div>
   );
 }
 
-function JobCard({ result }: { result: MatchResult }) {
+/* ---------- Small pieces ---------- */
+
+function WeekRow({ hour, children }: { hour: number; children: React.ReactNode }) {
   return (
-    <article className="group rounded-3xl border border-slate-200 border-l-4 border-l-teal-500 bg-white p-5 shadow-[0_12px_35px_-26px_rgba(15,23,42,0.45)] transition hover:-translate-y-0.5 hover:border-teal-200 hover:border-l-teal-500 hover:shadow-[0_18px_42px_-24px_rgba(13,148,136,0.38)]">
-      <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className={`rounded-full px-3 py-1 text-xs font-black ${
-              result.scheduleSafe ? "bg-teal-50 text-teal-700" : "bg-amber-50 text-amber-800"
-            }`}>
-              {result.scheduleSafe ? "ไม่ชนตารางเรียน" : "ต้องเช็กเวลา"}
-            </span>
-            {result.isRelaxed ? (
-              <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-black text-amber-800">งานใกล้เคียง</span>
-            ) : null}
-            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600">{result.job.category}</span>
-          </div>
-          <h3 className="mt-3 text-xl font-black text-slate-950">{result.job.title}</h3>
-          <p className="text-sm font-semibold text-slate-500">{result.job.company}</p>
-        </div>
-        <div className="shrink-0 rounded-2xl bg-[linear-gradient(145deg,#0f172a,#134e4a)] px-4 py-3 text-center text-white shadow-lg shadow-teal-950/10">
-          <div className="text-3xl font-black">{result.score}</div>
-          <div className="text-xs font-bold text-slate-300">match score</div>
-        </div>
-      </div>
-
-      <div className="mt-4 grid gap-3 md:grid-cols-3">
-        <InfoBlock label="เวลา" value={formatShifts(result.job.shifts)} />
-        <InfoBlock label="ค่าจ้าง" value={`${result.job.wage} บาท/ชม.`} strong />
-        <InfoBlock label="พื้นที่/ระยะทาง" value={`${result.job.location ? `${result.job.location} · ` : ""}${result.job.distance === 0 ? "Online" : `${result.job.distance} กม.`}`} strong />
-      </div>
-
-      <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_auto] lg:items-end">
-        <div>
-          <div className="text-sm font-black text-slate-800">เหตุผลที่เหมาะ</div>
-          <ul className="mt-2 grid gap-1 text-sm leading-6 text-slate-600">
-            {[...result.reasons.slice(0, 4), ...result.warnings].map((reason) => <li key={reason}>• {reason}</li>)}
-          </ul>
-          <div className="mt-3 flex flex-wrap gap-2 text-xs font-bold">
-            <span className="rounded-full bg-sky-50 px-2.5 py-1 text-sky-700">Skills {result.skillScore}/35</span>
-            <span className="rounded-full bg-violet-50 px-2.5 py-1 text-violet-700">Time {result.timeScore}/25</span>
-            <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-emerald-700">Wage {result.wageScore}/20</span>
-            <span className="rounded-full bg-orange-50 px-2.5 py-1 text-orange-700">Distance {result.distanceScore}/20</span>
-          </div>
-        </div>
-        <a href={result.job.applyUrl} target="_blank" rel="noreferrer" className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-3 text-sm font-black text-white transition hover:bg-teal-700">
-          ดูงานและสมัคร <span aria-hidden="true">↗</span>
-        </a>
-      </div>
-    </article>
+    <>
+      <span className="flex items-center text-[11px] tabular-nums text-faint">{pad(hour)}</span>
+      {children}
+    </>
   );
 }
 
-function InfoBlock({ label, value, strong = false }: { label: string; value: string; strong?: boolean }) {
+function SectionHead({ step, id, title, sub, right }: { step: string; id: string; title: string; sub: string; right?: React.ReactNode }) {
   return (
-    <div className="rounded-2xl border border-slate-100 bg-slate-50/80 p-3">
-      <div className="text-xs font-bold uppercase text-slate-400">{label}</div>
-      <div className={`mt-1 text-sm leading-5 text-slate-800 ${strong ? "font-black" : "font-semibold"}`}>{value}</div>
+    <div className="flex flex-wrap items-start justify-between gap-3">
+      <div className="flex items-start gap-3">
+        <span className="bg-brand font-display grid h-8 w-8 shrink-0 place-items-center rounded-xl text-sm font-bold text-white shadow-[0_6px_14px_-8px_rgb(59_108_246/0.9)]">{step}</span>
+        <div>
+          <h2 id={id} className="text-[1.05rem] font-semibold leading-7">{title}</h2>
+          <p className="text-sm text-muted">{sub}</p>
+        </div>
+      </div>
+      {right}
+    </div>
+  );
+}
+
+function Segmented({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: Array<{ value: string; label: string }>;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div role="radiogroup" aria-label={label} className="flex rounded-full bg-bar-soft p-1">
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          role="radio"
+          aria-checked={value === option.value}
+          onClick={() => onChange(option.value)}
+          className={`rounded-full px-3.5 py-1.5 text-sm font-semibold transition ${
+            value === option.value ? "bg-highlight text-ink" : "text-white/75 hover:text-white"
+          }`}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function SmallButton({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button type="button" onClick={onClick} className="rounded-lg border border-line px-3 py-1.5 text-sm font-semibold text-muted transition hover:border-line-strong hover:text-ink">
+      {children}
+    </button>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="grid gap-1.5 text-sm font-semibold">
+      {label}
+      {children}
+    </label>
+  );
+}
+
+function NumberField({
+  label,
+  unit,
+  value,
+  step,
+  onChange,
+}: {
+  label: string;
+  unit: string;
+  value: number | "";
+  step?: number;
+  onChange: (value: number | "") => void;
+}) {
+  return (
+    <label className="grid min-w-0 content-start gap-1.5 text-sm font-semibold">
+      <span className="leading-5">{label}</span>
+      <input
+        type="number"
+        min={0}
+        step={step}
+        value={value}
+        placeholder="-"
+        onChange={(event) => onChange(event.target.value === "" ? "" : Number(event.target.value))}
+        className="field"
+      />
+      <span className="text-xs font-normal text-faint">{unit}</span>
+    </label>
+  );
+}
+
+function Chips({ title, options, selected, onToggle }: { title: string; options: string[]; selected: string[]; onToggle: (value: string) => void }) {
+  return (
+    <fieldset>
+      <legend className="mb-1.5 text-sm font-semibold">{title}</legend>
+      <div className="flex flex-wrap gap-1.5">
+        {options.map((option) => {
+          const active = selected.includes(option);
+          return (
+            <button
+              key={option}
+              type="button"
+              aria-pressed={active}
+              onClick={() => onToggle(option)}
+              className={`rounded-full border px-3 py-1.5 text-sm transition ${
+                active ? "border-transparent bg-brand text-white shadow-[0_6px_14px_-8px_rgb(59_108_246/0.9)]" : "border-line bg-surface text-muted hover:border-accent/40 hover:bg-accent-soft hover:text-accent-strong"
+              }`}
+            >
+              {option}
+            </button>
+          );
+        })}
+      </div>
+    </fieldset>
+  );
+}
+
+function Legend({ swatch, label }: { swatch: string; label: string }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span className={`inline-block h-3 w-3 rounded-sm ${swatch}`} aria-hidden="true" />
+      {label}
+    </span>
+  );
+}
+
+function Notice({ tone, title, children }: { tone: "neutral" | "warn" | "bad"; title: string; children: React.ReactNode }) {
+  const style = tone === "bad" ? "bg-bad-soft text-bad" : tone === "warn" ? "bg-warn-soft text-warn" : "bg-sunken text-muted";
+  return (
+    <div className={`rounded-xl p-5 text-sm leading-6 ${style}`}>
+      <h3 className="mb-1 font-bold">{title}</h3>
+      {children}
+    </div>
+  );
+}
+
+function Hero() {
+  const perks = [
+    { icon: "🗓️", label: "ไม่ชนคาบเรียน" },
+    { icon: "🛡️", label: "กรองงานน่าสงสัย" },
+    { icon: "📷", label: "อ่านตารางจากรูป" },
+  ];
+  return (
+    <div className="mx-auto max-w-[1440px] px-4 pt-6 sm:px-6 lg:pt-8">
+      <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-accent-strong">สำหรับนักเรียน นักศึกษา</p>
+          <h1 className="mt-1 text-2xl font-bold leading-tight sm:text-[2rem]">
+            หางานพาร์ทไทม์ที่ <span className="text-brand">ลงตัวกับตารางเรียน</span>
+          </h1>
+          <p className="mt-1.5 text-sm text-muted sm:text-base">บอกงานที่อยากได้ ใส่ตารางเรียน แล้วให้ AI Agent คัดงานที่ทำได้จริงให้คุณ</p>
+        </div>
+        <ul className="flex flex-wrap gap-2" aria-label="จุดเด่น">
+          {perks.map((perk) => (
+            <li
+              key={perk.label}
+              className="inline-flex items-center gap-1.5 rounded-full border border-white/70 bg-white/70 px-3 py-1.5 text-sm font-semibold text-ink shadow-sm backdrop-blur"
+            >
+              <span aria-hidden="true">{perk.icon}</span>
+              {perk.label}
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
+function EmptyStart() {
+  const steps = [
+    { n: "1", title: "บอกงานที่อยากได้", detail: "ตำแหน่ง จังหวัด ค่าจ้าง" },
+    { n: "2", title: "ใส่ตารางเรียน", detail: "ระบายเอง หรืออัปโหลดรูปตาราง" },
+    { n: "3", title: "ให้ Agent หางาน", detail: "คัดงานที่ไม่ชนคาบเรียนให้" },
+  ];
+  return (
+    <div className="rounded-2xl border border-dashed border-line-strong bg-sunken px-5 py-6">
+      <div className="flex items-center gap-3">
+        <span className="grid h-10 w-10 place-items-center rounded-xl bg-accent-soft text-accent" aria-hidden="true">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="11" cy="11" r="7" />
+            <path d="m20 20-3.5-3.5" />
+          </svg>
+        </span>
+        <div>
+          <h3 className="font-bold">ยังไม่ได้เริ่มค้นหา</h3>
+          <p className="text-sm text-muted">3 ขั้นตอนก็ได้งานที่เข้ากับเวลาว่างของคุณ</p>
+        </div>
+      </div>
+      <ol className="mt-4 grid gap-2.5 sm:grid-cols-3">
+        {steps.map((step) => (
+          <li key={step.n} className="flex items-start gap-2.5 rounded-xl bg-surface p-3 ring-1 ring-line">
+            <span className="bg-brand grid h-6 w-6 shrink-0 place-items-center rounded-full text-xs font-bold text-white">{step.n}</span>
+            <span className="min-w-0">
+              <span className="block text-sm font-semibold">{step.title}</span>
+              <span className="block text-xs text-muted">{step.detail}</span>
+            </span>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+function LoadingRows() {
+  return (
+    <div className="grid gap-2" aria-label="กำลังโหลด">
+      {[0, 1, 2].map((index) => (
+        <div key={index} className="h-14 animate-pulse rounded-xl bg-sunken" />
+      ))}
     </div>
   );
 }

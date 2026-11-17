@@ -3,7 +3,9 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 test("app source includes required MVP logic and data", async () => {
-  const source = await readFile(new URL("../app/JobFinderApp.tsx", import.meta.url), "utf8");
+  const source =
+    (await readFile(new URL("../app/JobFinderApp.tsx", import.meta.url), "utf8")) +
+    (await readFile(new URL("../app/job-logic.ts", import.meta.url), "utf8"));
 
   assert.match(source, /const mockJobs: Job\[\]/);
   assert.match(source, /function shiftsOverlap/);
@@ -29,13 +31,32 @@ test("route metadata is specific to Part-time Job Finder", async () => {
   assert.doesNotMatch(layout, /Starter Project/);
 });
 
-test("Gemini explanation route keeps LLM usage behind the server", async () => {
+test("ThaiLLM explanation route keeps LLM usage behind the server", async () => {
   const route = await readFile(new URL("../app/api/explain/route.ts", import.meta.url), "utf8");
+  const llm = await readFile(new URL("../app/api/llm.ts", import.meta.url), "utf8");
 
-  assert.match(route, /process\.env\.GEMINI_API_KEY/);
-  assert.match(route, /generateContent/);
+  assert.match(route, /requestLLM/);
   assert.match(route, /Do not recalculate schedules/);
-  assert.match(route, /x-goog-api-key/);
+  assert.match(llm, /process\.env\.THAILLM_API_KEY/);
+  assert.match(llm, /\/chat\/completions/);
+  assert.match(llm, /Authorization: `Bearer/);
+});
+
+test("AI-extracted shifts are checked against the post text", async () => {
+  const extract = await readFile(new URL("../app/api/jobs/extract-details.ts", import.meta.url), "utf8");
+
+  assert.match(extract, /function verifiedShifts/);
+  assert.match(extract, /function verifiedWage/);
+  assert.match(extract, /daysInPost/);
+});
+
+test("job shifts come from the post, not invented", async () => {
+  const route = await readFile(new URL("../app/api/jobs/route.ts", import.meta.url), "utf8");
+  const app = await readFile(new URL("../app/job-logic.ts", import.meta.url), "utf8");
+
+  assert.doesNotMatch(route, /fallbackShifts/);
+  assert.match(route, /extractJobDetails/);
+  assert.match(app, /item\.status !== "conflict"/);
 });
 
 test("live jobs route normalizes OpenWebNinja results on the server", async () => {
@@ -45,4 +66,27 @@ test("live jobs route normalizes OpenWebNinja results on the server", async () =
   assert.match(route, /normalizeJobs/);
   assert.match(route, /source: "openwebninja"/);
   assert.match(route, /job_apply_link/);
+});
+
+test("live jobs route prefers SerpApi Google Jobs when its key is set", async () => {
+  const route = await readFile(new URL("../app/api/jobs/route.ts", import.meta.url), "utf8");
+
+  assert.match(route, /process\.env\.SERPAPI_API_KEY/);
+  assert.match(route, /"engine", "google_jobs"/);
+  assert.match(route, /normalizeSerpJobs/);
+  assert.match(route, /searchCache/);
+});
+
+test("how-it-works page shows the diagram and the latest search trace", async () => {
+  const page = await readFile(new URL("../app/how-it-works/HowItWorks.tsx", import.meta.url), "utf8");
+  const route = await readFile(new URL("../app/api/jobs/route.ts", import.meta.url), "utf8");
+  const app = await readFile(new URL("../app/JobFinderApp.tsx", import.meta.url), "utf8");
+
+  assert.match(page, /function Diagram/);
+  assert.match(page, /function Timeline/);
+  assert.match(page, /useSyncExternalStore/); // localStorage read without breaking hydration
+  assert.match(route, /trace,/);
+  assert.match(app, /saveTrace\(trace\)/);
+  // the trace must never carry the API key
+  assert.doesNotMatch(route, /events\.push\([^)]*apiKey/s);
 });
