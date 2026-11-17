@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { IBM_Plex_Sans_Thai, Prompt } from "next/font/google";
 import "./globals.css";
 
@@ -23,6 +23,19 @@ export const metadata: Metadata = {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",
   },
+  // "Add to Home Screen" opens full-screen like an app
+  appleWebApp: {
+    capable: true,
+    title: "หางานว่าง",
+    statusBarStyle: "black",
+  },
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  themeColor: "#10162d",
 };
 
 export default function RootLayout({

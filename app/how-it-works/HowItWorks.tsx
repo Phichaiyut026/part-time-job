@@ -105,7 +105,12 @@ export function HowItWorks() {
           ) : (
             <Reveal>
               <div className="panel-glow grid place-items-center gap-3 px-6 py-14 text-center">
-                <span className="bg-brand grid h-16 w-16 place-items-center rounded-3xl text-3xl shadow-lg" aria-hidden="true">🔭</span>
+                <span className="bg-brand grid h-16 w-16 place-items-center rounded-3xl text-white shadow-lg" aria-hidden="true">
+                  <svg className="h-7 w-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="11" cy="11" r="8" />
+                    <path d="m21 21-4.3-4.3" />
+                  </svg>
+                </span>
                 <p className="font-display text-xl font-semibold">ยังไม่มีการค้นหาในเบราว์เซอร์นี้</p>
                 <p className="max-w-md text-sm text-muted">ลองค้นหาสักครั้ง แล้วกลับมาดูว่าแต่ละขั้นทำอะไร ใช้เวลาเท่าไหร่ และ AI อ่านอะไรจากแต่ละประกาศ</p>
                 <Link href="/" className="btn-primary font-display mt-2 rounded-2xl px-5 py-3 text-sm font-semibold">

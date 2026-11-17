@@ -7,13 +7,55 @@ import type { SearchTrace, TraceEvent } from "../trace";
 
 type LaneId = "user" | "browser" | "server" | "ai" | "web";
 
-const LANES: Array<{ id: LaneId; icon: string; name: string; sub: string; color: string; soft: string }> = [
-  { id: "user", icon: "🎓", name: "นักศึกษา", sub: "คนใช้งาน", color: "#0ea5e9", soft: "#e0f2fe" },
-  { id: "browser", icon: "🖥️", name: "เบราว์เซอร์", sub: "หน้าเว็บ · คำนวณในเครื่อง", color: "#3b6cf6", soft: "#e8efff" },
-  { id: "server", icon: "⚙️", name: "เซิร์ฟเวอร์", sub: "/api/jobs · /api/explain", color: "#6366f1", soft: "#eceefe" },
-  { id: "ai", icon: "🧠", name: "ThaiLLM", sub: "typhoon-s-thaillm-8b", color: "#a855f7", soft: "#f3e8ff" },
-  { id: "web", icon: "🌐", name: "Google Jobs", sub: "ผ่าน SerpApi", color: "#10b981", soft: "#dcfce7" },
+const LANES: Array<{ id: LaneId; name: string; sub: string; color: string; soft: string }> = [
+  { id: "user", name: "นักศึกษา", sub: "คนใช้งาน", color: "#0ea5e9", soft: "#e0f2fe" },
+  { id: "browser", name: "เบราว์เซอร์", sub: "หน้าเว็บ · คำนวณในเครื่อง", color: "#3b6cf6", soft: "#e8efff" },
+  { id: "server", name: "เซิร์ฟเวอร์", sub: "/api/jobs · /api/explain", color: "#6366f1", soft: "#eceefe" },
+  { id: "ai", name: "ThaiLLM", sub: "typhoon-s-thaillm-8b", color: "#a855f7", soft: "#f3e8ff" },
+  { id: "web", name: "Google Jobs", sub: "ผ่าน SerpApi", color: "#10b981", soft: "#dcfce7" },
 ];
+
+function LaneIcon({ id, className }: { id: LaneId; className?: string }) {
+  switch (id) {
+    case "user":
+      return (
+        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M22 10v6M2 10l10-5 10 5-10 5z" />
+          <path d="M6 12v5c3 3 9 3 12 0v-5" />
+        </svg>
+      );
+    case "browser":
+      return (
+        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="2" y="3" width="20" height="14" rx="2" />
+          <path d="M8 21h8M12 17v4" />
+        </svg>
+      );
+    case "server":
+      return (
+        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="2" y="2" width="20" height="8" rx="2" />
+          <rect x="2" y="14" width="20" height="8" rx="2" />
+          <path d="M6 6h.01M6 18h.01" />
+        </svg>
+      );
+    case "ai":
+      return (
+        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="4" y="4" width="16" height="16" rx="2" />
+          <rect x="9" y="9" width="6" height="6" />
+          <path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2" />
+        </svg>
+      );
+    case "web":
+      return (
+        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="10" />
+          <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+        </svg>
+      );
+  }
+}
 
 const laneIndex = (id: LaneId) => LANES.findIndex((lane) => lane.id === id);
 const laneCenter = (id: LaneId) => ((laneIndex(id) + 0.5) / LANES.length) * 100;
@@ -212,8 +254,10 @@ export function SequenceDiagram({ trace }: { trace: SearchTrace | null }) {
                       boxShadow: involved ? `0 12px 28px -16px ${lane.color}` : undefined,
                     }}
                   >
-                    <div className="text-2xl" aria-hidden="true">{lane.icon}</div>
-                    <p className="font-display mt-1 text-sm font-semibold">{lane.name}</p>
+                    <div className="mx-auto flex h-8 w-8 items-center justify-center rounded-xl" style={{ color: lane.color, background: involved ? "rgb(255 255 255 / 0.7)" : lane.soft }} aria-hidden="true">
+                      <LaneIcon id={lane.id} className="h-4 w-4" />
+                    </div>
+                    <p className="font-display mt-1.5 text-sm font-semibold">{lane.name}</p>
                     <p className="truncate text-[11px] text-faint">{lane.sub}</p>
                   </div>
                 );
@@ -248,13 +292,15 @@ export function SequenceDiagram({ trace }: { trace: SearchTrace | null }) {
             <span className="chapter-num text-7xl">{String(active + 1).padStart(2, "0")}</span>
             <h4 className="font-display mt-3 text-xl font-semibold leading-snug">{message.title}</h4>
             <div className="mt-3 flex flex-wrap items-center gap-2 text-xs font-semibold">
-              <span className="rounded-full px-2.5 py-1" style={{ background: from.soft, color: from.color }}>
-                {from.icon} {from.name}
+              <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1" style={{ background: from.soft, color: from.color }}>
+                <LaneIcon id={from.id} className="h-3.5 w-3.5" />
+                {from.name}
               </span>
               <span className="text-faint">{message.from === message.to ? "↻ ทำเอง" : "→"}</span>
               {message.from !== message.to && (
-                <span className="rounded-full px-2.5 py-1" style={{ background: to.soft, color: to.color }}>
-                  {to.icon} {to.name}
+                <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1" style={{ background: to.soft, color: to.color }}>
+                  <LaneIcon id={to.id} className="h-3.5 w-3.5" />
+                  {to.name}
                 </span>
               )}
               {message.via && <span className="rounded-full bg-sunken px-2.5 py-1 text-muted ring-1 ring-line">{message.via}</span>}

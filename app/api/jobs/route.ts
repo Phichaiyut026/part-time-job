@@ -1,6 +1,7 @@
 import { planSearch } from "./search-plan";
 import { extractJobDetails } from "./extract-details";
 import type { ExtractionRow, ServerTrace, SourceStat, TraceEvent } from "../../trace";
+import { findKeywords } from "../../job-logic";
 
 export const runtime = "edge";
 
@@ -298,6 +299,15 @@ export async function GET(request: Request) {
   const query = searchParams.get("query")?.trim() || "part time student jobs";
   const location = searchParams.get("location")?.trim() || "Bangkok, Thailand";
   const apiQuery = buildLocationQuery(query, location);
+  // Roles + keywords the student accepted from their resume ("a|b|c"), matched against each full post below.
+  const resumeKeywords = [
+    ...new Set(
+      (searchParams.get("resume") ?? "")
+        .split("|")
+        .map((word) => word.trim())
+        .filter((word) => word.length >= 2 && word.length <= 60),
+    ),
+  ].slice(0, 12);
 
   if (!provider) {
     return Response.json({ error: "Missing job API key" }, { status: 500 });
@@ -308,7 +318,7 @@ export async function GET(request: Request) {
   events.push({
     actor: "server",
     title: "รับคำขอค้นหา",
-    detail: `ตำแหน่ง "${query}" · พื้นที่ ${location} · แหล่งงาน ${providerLabel}`,
+    detail: `ตำแหน่ง "${query}" · พื้นที่ ${location} · แหล่งงาน ${providerLabel}${resumeKeywords.length ? ` · ใช้คำจากเรซูเม่ ${resumeKeywords.length} คำ` : ""}`,
     status: "ok",
   });
 
@@ -403,6 +413,9 @@ export async function GET(request: Request) {
         ...job,
         shifts: found?.shifts ?? [],
         wage: job.wage ?? found?.wagePerHour ?? null,
+        ...(resumeKeywords.length
+          ? { resumeMatches: findKeywords(`${job.title} ${job.company} ${job.description ?? ""}`, resumeKeywords) }
+          : {}),
       };
       delete enriched.description; // full post text stays on the server
       return enriched;

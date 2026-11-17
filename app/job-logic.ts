@@ -30,6 +30,17 @@ export type Job = {
   location?: string;
   country?: string;
   source?: "openwebninja" | "serpapi" | "demo";
+  /** Resume keywords/roles found in the full job post (computed on the server, where the post text stays). */
+  resumeMatches?: string[];
+};
+
+/** What the AI read from the student's resume (see /api/resume). */
+export type ResumeProfile = {
+  roles: string[];
+  skills: string[];
+  interests: string[];
+  keywords: string[];
+  summary: string;
 };
 
 export type ScheduleStatus = "safe" | "conflict" | "unknown";
@@ -43,6 +54,8 @@ export type StudentProfile = {
   major: string;
   skills: string[];
   interests: string[];
+  /** Roles + keywords from the resume, used to rank jobs that mention them higher. */
+  resumeKeywords?: string[];
   minWage: number | "";
   maxDistance: number | "";
   maxHours: number | "";
@@ -199,13 +212,34 @@ export function checkRequirements(job: Job, limits: Thresholds) {
   return { failures, unknowns };
 }
 
+/** Resume words this job mentions: from the server's full-post check if present, else the title (demo jobs). */
+export function resumeMatchesFor(job: Job, keywords: string[]) {
+  if (!keywords.length) return [];
+  if (job.resumeMatches) return job.resumeMatches.filter((word) => keywords.includes(word));
+  return findKeywords(`${job.title} ${job.category}`, keywords);
+}
+
+/** Case-insensitive whole-word-ish match; Thai has no spaces, so Thai keywords match as substrings. */
+export function findKeywords(text: string, keywords: string[]) {
+  const haystack = text.toLowerCase();
+  return keywords.filter((keyword) => {
+    const needle = keyword.toLowerCase().trim();
+    if (needle.length < 2) return false;
+    if (/[\u0E00-\u0E7F]/.test(needle)) return haystack.includes(needle);
+    const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`(^|[^a-z0-9])${escaped}($|[^a-z0-9])`, "i").test(haystack);
+  });
+}
+
 export function scoreJob(job: Job, profile: StudentProfile): MatchResult {
   const { minWage, maxDistance, maxHours } = thresholdsOf(profile);
   const matchedSkills = job.skills.filter((skill) => profile.skills.includes(skill));
   const matchedInterests = job.interests.filter((interest) => profile.interests.includes(interest));
   const skillBase = job.skills.length ? matchedSkills.length / job.skills.length : 1;
   const interestBoost = matchedInterests.length ? 0.2 : 0;
-  const skillScore = Math.min(35, Math.round((skillBase + interestBoost) * 35));
+  const matchedResume = resumeMatchesFor(job, profile.resumeKeywords ?? []);
+  const resumeBoost = Math.min(0.3, matchedResume.length * 0.1);
+  const skillScore = Math.min(35, Math.round((skillBase + interestBoost + resumeBoost) * 35));
   const hours = Number(weeklyHours(job).toFixed(1));
   const knownShifts = job.shifts.length > 0;
   // Unknown values get half marks: not rewarded, not punished. Tiers still put them below known matches.
@@ -221,6 +255,7 @@ export function scoreJob(job: Job, profile: StudentProfile): MatchResult {
     "ไม่ชนกับตารางเรียน",
     matchedSkills.length ? `ทักษะตรงกัน: ${matchedSkills.join(", ")}` : "ไม่ต้องใช้ทักษะที่คุณเลือกโดยตรงมากนัก",
     matchedInterests.length ? `ตรงกับความสนใจด้าน ${matchedInterests.join(", ")}` : "ประเภทงานยังอยู่ในเกณฑ์ที่ทำได้",
+    ...(matchedResume.length ? [`ตรงกับเรซูเม่ของคุณ: ${matchedResume.join(", ")}`] : []),
     knownShifts
       ? `${hours} ชั่วโมง/สัปดาห์${maxHours ? ` จากเพดาน ${maxHours} ชั่วโมง` : ""}`
       : "ยังไม่ทราบจำนวนชั่วโมงต่อสัปดาห์",

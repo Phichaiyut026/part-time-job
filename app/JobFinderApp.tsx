@@ -31,6 +31,7 @@ import {
 import { ALL_THAILAND, DEFAULT_LOCATION, provinceByLocation, provinces, regions } from "./thai-provinces";
 import { saveTrace, type RemovedJob, type SearchTrace, type ServerTrace } from "./trace";
 import { SiteHeader } from "./site-header";
+import { ResumeOcr, type AppliedResume } from "./ResumeOcr";
 import { ScheduleOcr } from "./ScheduleOcr";
 
 /* ---------- Week grid helpers ---------- */
@@ -111,6 +112,7 @@ function describeApiError(error: string | undefined, status: number, details?: u
   if (/run out of searches|limit/i.test(reason) || status === 429) return "ค้นหางานจริงครบจำนวนที่ใช้ได้แล้ว ลองใหม่ภายหลัง";
   if (/location/i.test(reason)) return `ไม่รู้จักพื้นที่นี้ ลองพิมพ์ เช่น "Bangkok, Thailand"`;
   if (error === "Could not fetch jobs") return "เชื่อมต่อไม่ได้ ตรวจสอบอินเทอร์เน็ตแล้วลองใหม่";
+  if (error === "Missing job API key") return "ยังไม่ได้ใส่ API key ของระบบค้นหางาน (SERPAPI_API_KEY ในไฟล์ .env)";
   return "ระบบค้นหางานจริงยังไม่พร้อมใช้งานในขณะนี้";
 }
 
@@ -174,7 +176,7 @@ const tierOrder: Tier[] = ["match", "relaxed", "check", "other"];
 export function JobFinderApp() {
   const [profile, setProfile] = useState<StudentProfile>(initialProfile);
   const [cells, setCells] = useState<Set<string>>(() => scheduleToCells(defaultSchedule));
-  const [jobQuery, setJobQuery] = useState("part time student jobs");
+  const [jobQuery, setJobQuery] = useState("");
   const [jobLocation, setJobLocation] = useState(DEFAULT_LOCATION);
   const locationName = provinceByLocation(jobLocation)?.th ?? jobLocation;
   const [dataSource, setDataSource] = useState<DataSource>("live");
@@ -188,8 +190,46 @@ export function JobFinderApp() {
   const [aiExplanation, setAiExplanation] = useState("");
   const [openId, setOpenId] = useState<number | null>(null);
   const [elapsedMs, setElapsedMs] = useState<number | null>(null);
+  const [mobileStep, setMobileStep] = useState<MobileStep>(1);
+  const [resume, setResume] = useState<AppliedResume | null>(null);
+  const resumeKeywords = useMemo(
+    () => (resume ? [...new Set([resume.role, ...resume.keywords].filter(Boolean))] : []),
+    [resume],
+  );
+
+  const applyResume = (next: AppliedResume) => {
+    setResume(next);
+    if (next.role) setJobQuery(next.role);
+    setProfile((current) => ({
+      ...current,
+      skills: [...new Set([...current.skills, ...next.skills])],
+      interests: [...new Set([...current.interests, ...next.interests])],
+    }));
+  };
+  const autoAdvanceRef = useRef(false);
   const searchStartedAt = useRef(0);
   const traceRef = useRef<SearchTrace | null>(null);
+
+  const goToMobileStep = (step: MobileStep) => {
+    autoAdvanceRef.current = false;
+    setMobileStep(step);
+    if (typeof window !== "undefined" && window.innerWidth < 1024) {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  };
+
+  useEffect(() => {
+    if (!hasSearched || isSearching || !autoAdvanceRef.current) return;
+    const timer = window.setTimeout(() => {
+      if (!autoAdvanceRef.current) return;
+      autoAdvanceRef.current = false;
+      setMobileStep(4);
+      if (window.innerWidth < 1024) {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      }
+    }, 1100);
+    return () => window.clearTimeout(timer);
+  }, [hasSearched, isSearching]);
 
   const schedule = useMemo(() => cellsToSchedule(cells), [cells]);
   const results = useMemo(() => outcome?.results ?? [], [outcome]);
@@ -298,6 +338,11 @@ export function JobFinderApp() {
 
   const runSearch = async () => {
     if (busy) return;
+    autoAdvanceRef.current = true;
+    setMobileStep(3);
+    if (typeof window !== "undefined" && window.innerWidth < 1024) {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
     setHasSearched(true);
     setIsSearching(true);
     setElapsedMs(null);
@@ -311,7 +356,7 @@ export function JobFinderApp() {
     const trace: SearchTrace = {
       at: new Date().toISOString(),
       mode: dataSource,
-      query: jobQuery,
+      query: jobQuery.trim() || "งานพาร์ทไทม์ทั่วไป",
       locationName,
       totalMs: 0,
       ok: true,
@@ -319,7 +364,7 @@ export function JobFinderApp() {
         {
           actor: "browser",
           title: "อ่านข้อมูลจากหน้าเว็บ",
-          detail: `ตารางเรียน ${schedule.length} ช่วง · ทักษะ ${profile.skills.length} อย่าง · ${dataSource === "demo" ? "โหมดงานตัวอย่าง" : `ส่งคำขอไปเซิร์ฟเวอร์ (${locationName})`}`,
+          detail: `ตารางเรียน ${schedule.length} ช่วง · ทักษะ ${profile.skills.length} อย่าง${resumeKeywords.length ? ` · คำจากเรซูเม่ ${resumeKeywords.length} คำ` : ""} · ${dataSource === "demo" ? "โหมดงานตัวอย่าง" : `ส่งคำขอไปเซิร์ฟเวอร์ (${locationName})`}`,
           status: "ok",
         },
       ],
@@ -343,7 +388,9 @@ export function JobFinderApp() {
         trace.sources = [{ name: "ข้อมูลตัวอย่าง (สมมติ)", count: foundJobs.length }];
       } else {
         const response = await fetch(
-          `/api/jobs?query=${encodeURIComponent(jobQuery)}&location=${encodeURIComponent(jobLocation)}`,
+          `/api/jobs?query=${encodeURIComponent(jobQuery)}&location=${encodeURIComponent(jobLocation)}${
+            resumeKeywords.length ? `&resume=${encodeURIComponent(resumeKeywords.join("|"))}` : ""
+          }`,
         );
         const data = (await readJson(response)) as {
           jobs?: Job[];
@@ -374,7 +421,7 @@ export function JobFinderApp() {
       }
 
       const filterStarted = performance.now();
-      const next = filterAndScoreJobs(foundJobs, profile, schedule);
+      const next = filterAndScoreJobs(foundJobs, { ...profile, resumeKeywords }, schedule);
       trace.removed = removedJobs(foundJobs, schedule);
       trace.events.push({
         actor: "browser",
@@ -425,11 +472,21 @@ export function JobFinderApp() {
           ]}
         />
       </SiteHeader>
-      <Hero />
+      <MobileStepper
+        step={mobileStep}
+        onSelect={goToMobileStep}
+        isSearching={isSearching}
+        hasSearched={hasSearched}
+        resultsCount={results.length}
+      />
+      <Hero hiddenOnMobile={mobileStep !== 1} />
 
-      <main className="page-layout mx-auto max-w-[1440px] px-4 py-5 sm:px-6 lg:py-7">
+      <main className="page-layout mx-auto max-w-[1440px] px-4 pb-28 pt-4 sm:px-6 lg:py-7">
           {/* 2. Class schedule (middle column on wide screens) */}
-          <section className="area-schedule panel p-4 sm:p-5" aria-labelledby="schedule-title">
+          <section
+            className={`area-schedule mobile-screen panel p-4 sm:p-5 ${mobileStep === 2 ? "block" : "hidden lg:block"}`}
+            aria-labelledby="schedule-title"
+          >
             <SectionHead
               step="2"
               id="schedule-title"
@@ -480,9 +537,13 @@ export function JobFinderApp() {
           </section>
 
           {/* 1. Preferences (left column on wide screens) */}
-          <section className="area-prefs panel flex flex-col p-4 sm:p-5" aria-labelledby="prefs-title">
+          <section
+            className={`area-prefs mobile-screen panel flex-col p-4 sm:p-5 ${mobileStep === 1 ? "flex" : "hidden lg:flex"}`}
+            aria-labelledby="prefs-title"
+          >
             <SectionHead step="1" id="prefs-title" title="งานแบบไหนที่อยากได้" sub="Agent ใช้ข้อมูลนี้คัดกรองและจัดอันดับ" />
-            <div className="mt-4 grid gap-4">
+            <div className="mt-4 grid grid-cols-[minmax(0,1fr)] gap-4">
+              <ResumeOcr applied={resume} onApply={applyResume} onClear={() => setResume(null)} />
               <Field label="ตำแหน่งงาน">
                 <input className="field" value={jobQuery} onChange={(event) => setJobQuery(event.target.value)} placeholder="เช่น ติวเตอร์, barista" />
               </Field>
@@ -514,7 +575,7 @@ export function JobFinderApp() {
               type="button"
               onClick={runSearch}
               disabled={busy}
-              className="btn-primary font-display mt-5 flex w-full items-center justify-center gap-2 rounded-2xl px-4 py-3.5 text-base font-semibold disabled:cursor-wait disabled:opacity-70 xl:mt-auto"
+              className="btn-primary font-display mt-5 hidden w-full items-center justify-center gap-2 rounded-2xl px-4 py-3.5 text-base font-semibold disabled:cursor-wait disabled:opacity-70 lg:flex xl:mt-auto"
             >
               <Icon name="spark" className="h-5 w-5" />
               {isSearching ? "Agent กำลังค้นหา…" : isExplaining ? "Agent กำลังสรุปผล…" : "ให้ Agent หางานให้"}
@@ -523,7 +584,7 @@ export function JobFinderApp() {
 
         {/* 3. Agent loop — right column, stays in view while scrolling results */}
         <section
-          className="area-agent panel overflow-hidden lg:sticky lg:top-[5.25rem] lg:max-h-[calc(100dvh-6.5rem)] lg:overflow-y-auto"
+          className={`area-agent mobile-screen panel overflow-hidden lg:sticky lg:top-[5.25rem] lg:block lg:max-h-[calc(100dvh-6.5rem)] lg:overflow-y-auto ${mobileStep === 3 ? "block" : "hidden"}`}
           aria-labelledby="agent-title"
           aria-live="polite"
         >
@@ -543,7 +604,17 @@ export function JobFinderApp() {
         </section>
 
         {/* 4. Results */}
-        <div className="area-results grid gap-4">
+        <div className={`area-results mobile-screen gap-4 ${mobileStep === 4 ? "grid" : "hidden lg:grid"}`}>
+        {hasSearched && !isSearching && jobSource !== "error" && (isExplaining || explanation) && (
+          <div className="rounded-2xl border border-line bg-surface p-4 shadow-sm lg:hidden">
+            <p className="text-xs font-bold uppercase tracking-wider text-accent-strong">
+              สรุปจาก AI Agent
+            </p>
+            <p className="mt-1 text-sm leading-6 text-ink">
+              {isExplaining ? "กำลังสรุปคำแนะนำให้เข้ากับตารางเรียนของคุณ…" : explanation}
+            </p>
+          </div>
+        )}
         <section className="@container panel p-4 sm:p-5" aria-labelledby="results-title">
           <SectionHead
             step="4"
@@ -582,6 +653,15 @@ export function JobFinderApp() {
         </p>
         </div>
       </main>
+      <MobileBottomBar
+        step={mobileStep}
+        onSelect={goToMobileStep}
+        onSearch={runSearch}
+        busy={busy}
+        isSearching={isSearching}
+        hasSearched={hasSearched}
+        resultsCount={results.length}
+      />
     </div>
   );
 }
@@ -1152,7 +1232,7 @@ function Segmented({
           role="radio"
           aria-checked={value === option.value}
           onClick={() => onChange(option.value)}
-          className={`rounded-full px-3.5 py-1.5 text-sm font-semibold transition ${
+          className={`rounded-full px-2.5 py-1 text-xs font-semibold transition sm:px-3.5 sm:py-1.5 sm:text-sm ${
             value === option.value ? "bg-highlight text-ink" : "text-white/75 hover:text-white"
           }`}
         >
@@ -1255,23 +1335,251 @@ function Notice({ tone, title, children }: { tone: "neutral" | "warn" | "bad"; t
   );
 }
 
-function Hero() {
+type MobileStep = 1 | 2 | 3 | 4;
+
+function MobileStepper({
+  step,
+  onSelect,
+  isSearching,
+  hasSearched,
+  resultsCount,
+}: {
+  step: MobileStep;
+  onSelect: (step: MobileStep) => void;
+  isSearching: boolean;
+  hasSearched: boolean;
+  resultsCount: number;
+}) {
+  const items: Array<{ id: MobileStep; label: string; badge?: string }> = [
+    { id: 1, label: "ข้อมูลงาน" },
+    { id: 2, label: "ตารางเรียน" },
+    { id: 3, label: isSearching ? "กำลังทำงาน" : "AI Agent" },
+    {
+      id: 4,
+      label: "งานที่แนะนำ",
+      badge: hasSearched && !isSearching ? String(resultsCount) : undefined,
+    },
+  ];
+  const current = items.find((item) => item.id === step);
+
+  return (
+    <nav
+      className="mobile-stepper sticky z-20 border-b border-line/80 bg-paper/95 px-4 py-2.5 backdrop-blur sm:px-6 lg:hidden"
+      aria-label="ขั้นตอนการใช้งาน"
+    >
+      <div className="mb-2 flex items-center justify-between text-xs">
+        <span className="font-bold text-ink">
+          ขั้นที่ {step} จาก 4 · {current?.label}
+        </span>
+        <span className="font-semibold tabular-nums text-muted">
+          {Math.round((step / 4) * 100)}%
+        </span>
+      </div>
+      <ol className="grid grid-cols-4 gap-1.5">
+        {items.map((item) => {
+          const active = step === item.id;
+          const done =
+            item.id < step ||
+            (item.id === 3 && hasSearched && !isSearching) ||
+            (item.id === 4 && hasSearched && !isSearching && resultsCount > 0 && step === 4);
+          return (
+            <li key={item.id}>
+              <button
+                type="button"
+                onClick={() => onSelect(item.id)}
+                aria-current={active ? "step" : undefined}
+                className="flex w-full flex-col gap-1 text-left"
+              >
+                <span
+                  className={`h-1.5 w-full rounded-full transition-colors ${
+                    active ? "bg-brand" : done ? "bg-good" : "bg-line"
+                  }`}
+                />
+                <span
+                  className={`flex items-center justify-center gap-1 truncate text-[11px] font-semibold ${
+                    active ? "text-accent-strong" : "text-muted"
+                  }`}
+                >
+                  <span className="truncate">{item.label}</span>
+                  {item.badge !== undefined && (
+                    <span className="rounded-full bg-accent-soft px-1 text-[10px] tabular-nums text-accent-strong">
+                      {item.badge}
+                    </span>
+                  )}
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ol>
+    </nav>
+  );
+}
+
+function MobileBottomBar({
+  step,
+  onSelect,
+  onSearch,
+  busy,
+  isSearching,
+  hasSearched,
+  resultsCount,
+}: {
+  step: MobileStep;
+  onSelect: (step: MobileStep) => void;
+  onSearch: () => void;
+  busy: boolean;
+  isSearching: boolean;
+  hasSearched: boolean;
+  resultsCount: number;
+}) {
+  return (
+    <div className="fixed inset-x-0 bottom-0 z-30 border-t border-line/90 bg-surface/95 px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-[0_-8px_30px_-16px_rgb(15_23_42/0.18)] backdrop-blur lg:hidden">
+      <div className="mx-auto flex max-w-[1440px] items-center gap-2.5">
+        {step === 1 && (
+          <>
+            <button
+              type="button"
+              onClick={onSearch}
+              disabled={busy}
+              className="rounded-2xl bg-sunken px-4 py-3.5 text-sm font-semibold text-ink ring-1 ring-line transition hover:bg-white disabled:opacity-50"
+            >
+              ค้นหาเลย
+            </button>
+            <button
+              type="button"
+              onClick={() => onSelect(2)}
+              className="btn-primary font-display flex-1 rounded-2xl px-4 py-3.5 text-base font-semibold"
+            >
+              ถัดไป: ตารางเรียน →
+            </button>
+          </>
+        )}
+
+        {step === 2 && (
+          <>
+            <button
+              type="button"
+              onClick={() => onSelect(1)}
+              className="rounded-2xl bg-sunken px-4 py-3.5 text-sm font-semibold text-ink ring-1 ring-line transition hover:bg-white"
+            >
+              ← ข้อมูลงาน
+            </button>
+            <button
+              type="button"
+              onClick={onSearch}
+              disabled={busy}
+              className="btn-primary font-display flex flex-1 items-center justify-center gap-2 rounded-2xl px-4 py-3.5 text-base font-semibold disabled:cursor-wait disabled:opacity-70"
+            >
+              <Icon name="spark" className="h-5 w-5" />
+              {isSearching ? "Agent กำลังค้นหา…" : "ให้ Agent หางานให้"}
+            </button>
+          </>
+        )}
+
+        {step === 3 && (
+          <>
+            <button
+              type="button"
+              onClick={() => onSelect(2)}
+              className="rounded-2xl bg-sunken px-4 py-3.5 text-sm font-semibold text-ink ring-1 ring-line transition hover:bg-white"
+            >
+              ← ตารางเรียน
+            </button>
+            {hasSearched && !isSearching ? (
+              <button
+                type="button"
+                onClick={() => onSelect(4)}
+                className="btn-primary font-display flex-1 rounded-2xl px-4 py-3.5 text-base font-semibold"
+              >
+                ดูงานที่แนะนำ ({resultsCount}) →
+              </button>
+            ) : isSearching ? (
+              <button
+                type="button"
+                disabled
+                className="btn-primary font-display flex-1 cursor-wait rounded-2xl px-4 py-3.5 text-base font-semibold opacity-80"
+              >
+                AI Agent กำลังทำงาน…
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={onSearch}
+                disabled={busy}
+                className="btn-primary font-display flex flex-1 items-center justify-center gap-2 rounded-2xl px-4 py-3.5 text-base font-semibold"
+              >
+                <Icon name="spark" className="h-5 w-5" />
+                ให้ Agent หางานให้
+              </button>
+            )}
+          </>
+        )}
+
+        {step === 4 && (
+          <>
+            <button
+              type="button"
+              onClick={() => onSelect(3)}
+              className="rounded-2xl bg-sunken px-4 py-3.5 text-sm font-semibold text-ink ring-1 ring-line transition hover:bg-white"
+            >
+              ← ดู Agent
+            </button>
+            <button
+              type="button"
+              onClick={() => onSelect(1)}
+              className="btn-primary font-display flex-1 rounded-2xl px-4 py-3.5 text-base font-semibold"
+            >
+              ค้นหาใหม่
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Hero({ hiddenOnMobile }: { hiddenOnMobile?: boolean }) {
   const perks = [
-    { icon: "🗓️", label: "ไม่ชนคาบเรียน" },
-    { icon: "🛡️", label: "กรองงานน่าสงสัย" },
-    { icon: "📷", label: "อ่านตารางจากรูป" },
+    {
+      label: "ไม่ชนคาบเรียน",
+      icon: (
+        <svg className="h-4 w-4 text-accent-strong" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="3" y="4" width="18" height="18" rx="2" />
+          <path d="M16 2v4M8 2v4M3 10h18" />
+        </svg>
+      ),
+    },
+    {
+      label: "กรองงานน่าสงสัย",
+      icon: (
+        <svg className="h-4 w-4 text-accent-strong" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+          <path d="m9 12 2 2 4-4" />
+        </svg>
+      ),
+    },
+    {
+      label: "อ่านตารางจากรูป",
+      icon: (
+        <svg className="h-4 w-4 text-accent-strong" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z" />
+          <circle cx="12" cy="13" r="3" />
+        </svg>
+      ),
+    },
   ];
   return (
-    <div className="mx-auto max-w-[1440px] px-4 pt-6 sm:px-6 lg:pt-8">
+    <div className={`mx-auto max-w-[1440px] px-4 pt-4 sm:px-6 lg:pt-8 ${hiddenOnMobile ? "hidden lg:block" : "block"}`}>
       <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
         <div className="min-w-0">
-          <p className="text-sm font-semibold text-accent-strong">สำหรับนักเรียน นักศึกษา</p>
-          <h1 className="mt-1 text-2xl font-bold leading-tight sm:text-[2rem]">
+          <p className="hidden text-sm font-semibold text-accent-strong lg:block">สำหรับนักเรียน นักศึกษา</p>
+          <h1 className="text-xl font-bold leading-tight sm:text-2xl lg:mt-1 lg:text-[2rem]">
             หางานพาร์ทไทม์ที่ <span className="text-brand">ลงตัวกับตารางเรียน</span>
           </h1>
-          <p className="mt-1.5 text-sm text-muted sm:text-base">บอกงานที่อยากได้ ใส่ตารางเรียน แล้วให้ AI Agent คัดงานที่ทำได้จริงให้คุณ</p>
+          <p className="mt-1 text-sm text-muted sm:text-base lg:mt-1.5">บอกงานที่อยากได้ ใส่ตารางเรียน แล้วให้ AI Agent คัดงานที่ทำได้จริงให้คุณ</p>
         </div>
-        <ul className="flex flex-wrap gap-2" aria-label="จุดเด่น">
+        <ul className="hidden flex-wrap gap-2 lg:flex" aria-label="จุดเด่น">
           {perks.map((perk) => (
             <li
               key={perk.label}

@@ -1,4 +1,5 @@
 import { llmConfigured, parseJsonObject, requestLLM } from "../../llm";
+import { runOcr, type OcrResult } from "../../ocr-client";
 
 export const runtime = "edge";
 
@@ -14,8 +15,6 @@ const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] as const;
 type Day = (typeof DAYS)[number];
 
-type OcrLine = { text: string; confidence?: number; box?: unknown; cell?: unknown };
-type OcrResult = { width: number; height: number; lines: OcrLine[] };
 
 export type OcrScheduleBlock = { day: Day; start: string; end: string; subject: string };
 
@@ -153,27 +152,6 @@ function cleanBlocks(raw: unknown): { blocks: OcrScheduleBlock[]; dropped: numbe
   }
   blocks.sort((a, b) => DAYS.indexOf(a.day) - DAYS.indexOf(b.day) || minutes(a.start) - minutes(b.start));
   return { blocks, dropped };
-}
-
-async function runOcr(image: File): Promise<{ ok: true; data: OcrResult } | { ok: false; status: number; error: string }> {
-  const baseUrl = (process.env.OCR_SERVICE_URL || "http://127.0.0.1:8765").replace(/\/+$/, "");
-  const headers: Record<string, string> = { "Content-Type": image.type || "application/octet-stream" };
-  if (process.env.OCR_SERVICE_TOKEN) headers.Authorization = `Bearer ${process.env.OCR_SERVICE_TOKEN}`;
-  try {
-    const response = await fetch(`${baseUrl}/ocr`, {
-      method: "POST",
-      headers,
-      body: await image.arrayBuffer(),
-      signal: AbortSignal.timeout(60_000),
-    });
-    const data = (await response.json().catch(() => null)) as (OcrResult & { error?: string }) | null;
-    if (!response.ok || !data || !Array.isArray(data.lines)) {
-      return { ok: false, status: response.status || 502, error: data?.error ?? "OCR service error" };
-    }
-    return { ok: true, data };
-  } catch (error) {
-    return { ok: false, status: 503, error: error instanceof Error ? error.message : "OCR service unreachable" };
-  }
 }
 
 export async function POST(request: Request) {

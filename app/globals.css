@@ -229,6 +229,55 @@ select {
   outline-offset: 2px;
 }
 
+/* ---------- Phone: app-style shell (below lg, where the step-by-step mobile flow is used) ---------- */
+.app-bar {
+  padding-top: env(safe-area-inset-top);
+}
+
+/* Step tabs pin right under the 56px app bar */
+.mobile-stepper {
+  top: calc(3.5rem + env(safe-area-inset-top));
+}
+
+@media (max-width: 1023px) {
+  html,
+  body {
+    overscroll-behavior-y: none;
+  }
+
+  body {
+    /* fixed backgrounds jank on mobile Safari */
+    background-attachment: scroll;
+  }
+
+  /* iOS zooms into inputs smaller than 16px */
+  .field {
+    font-size: 16px;
+  }
+
+  .panel {
+    border-radius: 1.25rem;
+  }
+
+  button,
+  a,
+  select,
+  input {
+    touch-action: manipulation;
+  }
+
+  /* Pressed feedback instead of hover on touch */
+  button:active:not(:disabled) {
+    transform: scale(0.98);
+  }
+}
+
+@media (min-width: 1024px) {
+  .app-bar {
+    padding-top: 0;
+  }
+}
+
 /* Flow diagram animations */
 @keyframes dash-flow {
   from {
@@ -532,8 +581,15 @@ select {
   }
 }
 
+@media (max-width: 1023px) {
+  .mobile-screen {
+    animation: seq-fade 220ms cubic-bezier(0.2, 0.7, 0.2, 1);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .seq-detail {
+  .seq-detail,
+  .mobile-screen {
     animation: none;
   }
 }

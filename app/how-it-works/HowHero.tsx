@@ -71,12 +71,73 @@ const STARS = Array.from({ length: 24 }, (_, i) => ({
 }));
 
 const FLOW = [
-  { icon: "🎓", label: "นักศึกษา", sub: "งาน + ตารางเรียน", glow: "rgb(96 165 250 / 80%)" },
-  { icon: "🖥️", label: "เว็บแอป", sub: "Next.js API", glow: "rgb(129 140 248 / 80%)" },
-  { icon: "🧠", label: "ThaiLLM", sub: "วางแผน · อ่านประกาศ", glow: "rgb(192 132 252 / 85%)" },
-  { icon: "🌐", label: "Google Jobs", sub: "ผ่าน SerpApi", glow: "rgb(52 211 153 / 80%)" },
-  { icon: "🛡️", label: "โค้ดตรวจซ้ำ", sub: "ชนคาบ · งานหลอก", glow: "rgb(251 191 36 / 80%)" },
-  { icon: "✨", label: "งานที่ใช่", sub: "จัดอันดับให้แล้ว", glow: "rgb(244 114 182 / 85%)" },
+  {
+    icon: (
+      <svg className="h-5 w-5 text-[#60a5fa]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M22 10v6M2 10l10-5 10 5-10 5z" />
+        <path d="M6 12v5c3 3 9 3 12 0v-5" />
+      </svg>
+    ),
+    label: "นักศึกษา",
+    sub: "งาน + ตารางเรียน",
+    glow: "rgb(96 165 250 / 80%)",
+  },
+  {
+    icon: (
+      <svg className="h-5 w-5 text-[#818cf8]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="2" y="3" width="20" height="14" rx="2" />
+        <path d="M8 21h8M12 17v4" />
+      </svg>
+    ),
+    label: "เว็บแอป",
+    sub: "Next.js API",
+    glow: "rgb(129 140 248 / 80%)",
+  },
+  {
+    icon: (
+      <svg className="h-5 w-5 text-[#c084fc]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="4" y="4" width="16" height="16" rx="2" />
+        <rect x="9" y="9" width="6" height="6" />
+        <path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2" />
+      </svg>
+    ),
+    label: "ThaiLLM",
+    sub: "วางแผน · อ่านประกาศ",
+    glow: "rgb(192 132 252 / 85%)",
+  },
+  {
+    icon: (
+      <svg className="h-5 w-5 text-[#34d399]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="12" r="10" />
+        <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+      </svg>
+    ),
+    label: "Google Jobs",
+    sub: "ผ่าน SerpApi",
+    glow: "rgb(52 211 153 / 80%)",
+  },
+  {
+    icon: (
+      <svg className="h-5 w-5 text-[#fbbf24]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+        <path d="m9 12 2 2 4-4" />
+      </svg>
+    ),
+    label: "โค้ดตรวจซ้ำ",
+    sub: "ชนคาบ · งานหลอก",
+    glow: "rgb(251 191 36 / 80%)",
+  },
+  {
+    icon: (
+      <svg className="h-5 w-5 text-[#f472b6]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+        <path d="m9 11 3 3L22 4" />
+      </svg>
+    ),
+    label: "งานที่ใช่",
+    sub: "จัดอันดับให้แล้ว",
+    glow: "rgb(244 114 182 / 85%)",
+  },
 ];
 
 const STATS: Array<{ value: number; suffix?: string; label: string }> = [
@@ -218,11 +279,62 @@ export function Chapter({ n, kicker, title, sub, id, right }: { n: string; kicke
 /* ---------- Timetable OCR pipeline ---------- */
 
 const OCR_FLOW = [
-  { icon: "📷", title: "รูปตารางเรียน", detail: "อัปโหลด ลากวาง หรือ Ctrl+V ภาพแคป · รูปอยู่ในหน่วยความจำ ไม่ถูกเก็บ", tone: "from-[#60a5fa] to-[#6366f1]" },
-  { icon: "🔎", title: "OpenThai2.0-OCR", detail: "อ่านตัวอักษรไทย/อังกฤษบน CPU · ขยายภาพ 2 เท่า หาเส้นตาราง และป้ายสีประจำวัน", tone: "from-[#6366f1] to-[#a855f7]" },
-  { icon: "🧠", title: "DeepSeek", detail: "อ่านข้อความพร้อมตำแหน่ง แปลงเป็น วัน · เวลาเริ่ม · เวลาจบ เป็น JSON", tone: "from-[#a855f7] to-[#ec4899]" },
-  { icon: "🛡️", title: "โค้ดตรวจซ้ำ", detail: "วันต้องถูกต้อง เวลาต้องเป็น HH:MM และเริ่มก่อนจบ · ตัดช่วงที่ผิดทิ้ง", tone: "from-[#ec4899] to-[#f59e0b]" },
-  { icon: "✅", title: "นักศึกษายืนยัน", detail: "ติ๊กเลือกช่วงที่ถูก แล้วกดใช้ · ตารางเดิมเปลี่ยนเมื่อกดยืนยันเท่านั้น", tone: "from-[#f59e0b] to-[#22c55e]" },
+  {
+    icon: (
+      <svg className="h-6 w-6 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z" />
+        <circle cx="12" cy="13" r="3" />
+      </svg>
+    ),
+    title: "รูปตารางเรียน",
+    detail: "อัปโหลด ลากวาง หรือ Ctrl+V ภาพแคป · รูปอยู่ในหน่วยความจำ ไม่ถูกเก็บ",
+    tone: "from-[#60a5fa] to-[#6366f1]",
+  },
+  {
+    icon: (
+      <svg className="h-6 w-6 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="11" cy="11" r="8" />
+        <path d="m21 21-4.3-4.3" />
+      </svg>
+    ),
+    title: "OpenThai2.0-OCR",
+    detail: "อ่านตัวอักษรไทย/อังกฤษบน CPU · ขยายภาพ 2 เท่า หาเส้นตาราง และป้ายสีประจำวัน",
+    tone: "from-[#6366f1] to-[#a855f7]",
+  },
+  {
+    icon: (
+      <svg className="h-6 w-6 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="4" y="4" width="16" height="16" rx="2" />
+        <rect x="9" y="9" width="6" height="6" />
+        <path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2" />
+      </svg>
+    ),
+    title: "DeepSeek",
+    detail: "อ่านข้อความพร้อมตำแหน่ง แปลงเป็น วัน · เวลาเริ่ม · เวลาจบ เป็น JSON",
+    tone: "from-[#a855f7] to-[#ec4899]",
+  },
+  {
+    icon: (
+      <svg className="h-6 w-6 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+        <path d="m9 12 2 2 4-4" />
+      </svg>
+    ),
+    title: "โค้ดตรวจซ้ำ",
+    detail: "วันต้องถูกต้อง เวลาต้องเป็น HH:MM และเริ่มก่อนจบ · ตัดช่วงที่ผิดทิ้ง",
+    tone: "from-[#ec4899] to-[#f59e0b]",
+  },
+  {
+    icon: (
+      <svg className="h-6 w-6 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+        <path d="m9 11 3 3L22 4" />
+      </svg>
+    ),
+    title: "นักศึกษายืนยัน",
+    detail: "ติ๊กเลือกช่วงที่ถูก แล้วกดใช้ · ตารางเดิมเปลี่ยนเมื่อกดยืนยันเท่านั้น",
+    tone: "from-[#f59e0b] to-[#22c55e]",
+  },
 ];
 
 export function OcrPipeline() {
