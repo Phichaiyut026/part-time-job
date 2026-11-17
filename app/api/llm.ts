@@ -1,13 +1,37 @@
 /**
- * ThaiLLM client (OpenAI-compatible chat completions API).
- * Config comes from THAILLM_API_KEY, THAILLM_BASE_URL and THAILLM_MODEL in .env — never from the browser.
+ * Chat client for OpenAI-compatible chat completions APIs.
+ * - "thaillm" (default): job search planning, job-post reading, explanations.
+ *   THAILLM_API_KEY, THAILLM_BASE_URL, THAILLM_MODEL
+ * - "deepseek": reading OCR text from a class-timetable picture.
+ *   DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
+ * Keys come from .env on the server — never from the browser.
  */
 
-const DEFAULT_BASE_URL = "https://thaillm.or.th/api/v1";
-const DEFAULT_MODEL = "typhoon-s-thaillm-8b-instruct";
+export type LLMProvider = "thaillm" | "deepseek";
+
+function providerConfig(provider: LLMProvider) {
+  if (provider === "deepseek") {
+    return {
+      name: "DeepSeek",
+      apiKey: process.env.DEEPSEEK_API_KEY,
+      keyName: "DEEPSEEK_API_KEY",
+      baseUrl: process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com",
+      model: process.env.DEEPSEEK_MODEL || "deepseek-chat",
+    };
+  }
+  return {
+    name: "ThaiLLM",
+    apiKey: process.env.THAILLM_API_KEY,
+    keyName: "THAILLM_API_KEY",
+    baseUrl: process.env.THAILLM_BASE_URL || "https://thaillm.or.th/api/v1",
+    model: process.env.THAILLM_MODEL || "typhoon-s-thaillm-8b-instruct",
+  };
+}
+
 const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
 
 export type LLMRequest = {
+  provider?: LLMProvider;
   system: string;
   user: string;
   json?: boolean;
@@ -17,17 +41,18 @@ export type LLMRequest = {
 
 export type LLMResult = { ok: true; text: string } | { ok: false; status: number; error: string };
 
-export function llmConfigured() {
-  return Boolean(process.env.THAILLM_API_KEY);
+export function llmConfigured(provider: LLMProvider = "thaillm") {
+  return Boolean(providerConfig(provider).apiKey);
 }
 
 export async function requestLLM(request: LLMRequest): Promise<LLMResult> {
-  const apiKey = process.env.THAILLM_API_KEY;
-  if (!apiKey) return { ok: false, status: 0, error: "Missing THAILLM_API_KEY" };
+  const config = providerConfig(request.provider ?? "thaillm");
+  const apiKey = config.apiKey;
+  if (!apiKey) return { ok: false, status: 0, error: `Missing ${config.keyName}` };
 
-  const baseUrl = (process.env.THAILLM_BASE_URL || DEFAULT_BASE_URL).replace(/\/+$/, "");
+  const baseUrl = config.baseUrl.replace(/\/+$/, "");
   const body = JSON.stringify({
-    model: process.env.THAILLM_MODEL || DEFAULT_MODEL,
+    model: config.model,
     temperature: request.temperature ?? 0.2,
     max_tokens: request.maxTokens ?? 1200,
     ...(request.json ? { response_format: { type: "json_object" } } : {}),

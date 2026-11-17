@@ -31,6 +31,7 @@ import {
 import { ALL_THAILAND, DEFAULT_LOCATION, provinceByLocation, provinces, regions } from "./thai-provinces";
 import { saveTrace, type RemovedJob, type SearchTrace, type ServerTrace } from "./trace";
 import { SiteHeader } from "./site-header";
+import { ScheduleOcr } from "./ScheduleOcr";
 
 /* ---------- Week grid helpers ---------- */
 
@@ -424,7 +425,7 @@ export function JobFinderApp() {
           ]}
         />
       </SiteHeader>
-      <h1 className="sr-only">หางานพาร์ทไทม์ตามเวลาว่าง</h1>
+      <Hero />
 
       <main className="page-layout mx-auto max-w-[1440px] px-4 py-5 sm:px-6 lg:py-7">
           {/* 2. Class schedule (middle column on wide screens) */}
@@ -433,14 +434,15 @@ export function JobFinderApp() {
               step="2"
               id="schedule-title"
               title="ตารางเรียนของคุณ"
-              sub="คลิกหรือลากบนช่องเพื่อระบายชั่วโมงที่ติดเรียน"
+              sub="คลิกหรือลากเพื่อระบายชั่วโมงที่ติดเรียน"
               right={
-                <div className="flex gap-2">
+                <div className="flex shrink-0 gap-2">
                   <SmallButton onClick={() => setCells(scheduleToCells(defaultSchedule))}>ตัวอย่าง</SmallButton>
                   <SmallButton onClick={() => setCells(new Set())}>ล้าง</SmallButton>
                 </div>
               }
             />
+            <ScheduleOcr onApply={(blocks) => setCells(scheduleToCells(blocks.map((block, index) => ({ ...block, id: index + 1 }))))} />
             <div className="mt-4 grid select-none grid-cols-[2.6rem_repeat(7,minmax(0,1fr))] gap-1" role="group" aria-label="ตารางเรียนรายสัปดาห์">
               <span />
               {days.map((day) => (
@@ -512,8 +514,9 @@ export function JobFinderApp() {
               type="button"
               onClick={runSearch}
               disabled={busy}
-              className="mt-5 w-full rounded-xl bg-accent px-4 py-3.5 text-base font-bold text-white transition hover:bg-accent-strong disabled:cursor-wait disabled:opacity-70 xl:mt-auto"
+              className="btn-primary font-display mt-5 flex w-full items-center justify-center gap-2 rounded-2xl px-4 py-3.5 text-base font-semibold disabled:cursor-wait disabled:opacity-70 xl:mt-auto"
             >
+              <Icon name="spark" className="h-5 w-5" />
               {isSearching ? "Agent กำลังค้นหา…" : isExplaining ? "Agent กำลังสรุปผล…" : "ให้ Agent หางานให้"}
             </button>
           </section>
@@ -557,9 +560,7 @@ export function JobFinderApp() {
           />
           <div className="mt-4">
             {!hasSearched ? (
-              <Notice tone="neutral" title="ยังไม่ได้เริ่มค้นหา">
-                กรอกงานที่อยากได้ ระบายตารางเรียน แล้วกด “ให้ Agent หางานให้”
-              </Notice>
+              <EmptyStart />
             ) : isSearching ? (
               <LoadingRows />
             ) : jobSource === "error" ? (
@@ -687,10 +688,10 @@ function AgentPanel({
   return (
     <>
       {/* Header bar */}
-      <div className="bg-bar px-4 pb-4 pt-4 text-white sm:px-5">
+      <div className="bg-topbar px-4 pb-4 pt-4 text-white sm:px-5">
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-center gap-3">
-            <span className="relative grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-accent">
+            <span className="bg-brand relative grid h-10 w-10 shrink-0 place-items-center rounded-xl ring-1 ring-white/20">
               <Icon name="spark" className="h-5 w-5" />
               {working ? (
                 <span className="absolute -right-0.5 -top-0.5 h-3 w-3 animate-ping rounded-full bg-highlight" aria-hidden="true" />
@@ -1120,9 +1121,9 @@ function SectionHead({ step, id, title, sub, right }: { step: string; id: string
   return (
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div className="flex items-start gap-3">
-        <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-accent-soft text-sm font-bold text-accent-strong">{step}</span>
+        <span className="bg-brand font-display grid h-8 w-8 shrink-0 place-items-center rounded-xl text-sm font-bold text-white shadow-[0_6px_14px_-8px_rgb(59_108_246/0.9)]">{step}</span>
         <div>
-          <h2 id={id} className="font-bold leading-7">{title}</h2>
+          <h2 id={id} className="text-[1.05rem] font-semibold leading-7">{title}</h2>
           <p className="text-sm text-muted">{sub}</p>
         </div>
       </div>
@@ -1223,7 +1224,7 @@ function Chips({ title, options, selected, onToggle }: { title: string; options:
               aria-pressed={active}
               onClick={() => onToggle(option)}
               className={`rounded-full border px-3 py-1.5 text-sm transition ${
-                active ? "border-ink bg-ink text-white" : "border-line bg-surface text-muted hover:border-line-strong hover:text-ink"
+                active ? "border-transparent bg-brand text-white shadow-[0_6px_14px_-8px_rgb(59_108_246/0.9)]" : "border-line bg-surface text-muted hover:border-accent/40 hover:bg-accent-soft hover:text-accent-strong"
               }`}
             >
               {option}
@@ -1250,6 +1251,73 @@ function Notice({ tone, title, children }: { tone: "neutral" | "warn" | "bad"; t
     <div className={`rounded-xl p-5 text-sm leading-6 ${style}`}>
       <h3 className="mb-1 font-bold">{title}</h3>
       {children}
+    </div>
+  );
+}
+
+function Hero() {
+  const perks = [
+    { icon: "🗓️", label: "ไม่ชนคาบเรียน" },
+    { icon: "🛡️", label: "กรองงานน่าสงสัย" },
+    { icon: "📷", label: "อ่านตารางจากรูป" },
+  ];
+  return (
+    <div className="mx-auto max-w-[1440px] px-4 pt-6 sm:px-6 lg:pt-8">
+      <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-accent-strong">สำหรับนักเรียน นักศึกษา</p>
+          <h1 className="mt-1 text-2xl font-bold leading-tight sm:text-[2rem]">
+            หางานพาร์ทไทม์ที่ <span className="text-brand">ลงตัวกับตารางเรียน</span>
+          </h1>
+          <p className="mt-1.5 text-sm text-muted sm:text-base">บอกงานที่อยากได้ ใส่ตารางเรียน แล้วให้ AI Agent คัดงานที่ทำได้จริงให้คุณ</p>
+        </div>
+        <ul className="flex flex-wrap gap-2" aria-label="จุดเด่น">
+          {perks.map((perk) => (
+            <li
+              key={perk.label}
+              className="inline-flex items-center gap-1.5 rounded-full border border-white/70 bg-white/70 px-3 py-1.5 text-sm font-semibold text-ink shadow-sm backdrop-blur"
+            >
+              <span aria-hidden="true">{perk.icon}</span>
+              {perk.label}
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
+function EmptyStart() {
+  const steps = [
+    { n: "1", title: "บอกงานที่อยากได้", detail: "ตำแหน่ง จังหวัด ค่าจ้าง" },
+    { n: "2", title: "ใส่ตารางเรียน", detail: "ระบายเอง หรืออัปโหลดรูปตาราง" },
+    { n: "3", title: "ให้ Agent หางาน", detail: "คัดงานที่ไม่ชนคาบเรียนให้" },
+  ];
+  return (
+    <div className="rounded-2xl border border-dashed border-line-strong bg-sunken px-5 py-6">
+      <div className="flex items-center gap-3">
+        <span className="grid h-10 w-10 place-items-center rounded-xl bg-accent-soft text-accent" aria-hidden="true">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="11" cy="11" r="7" />
+            <path d="m20 20-3.5-3.5" />
+          </svg>
+        </span>
+        <div>
+          <h3 className="font-bold">ยังไม่ได้เริ่มค้นหา</h3>
+          <p className="text-sm text-muted">3 ขั้นตอนก็ได้งานที่เข้ากับเวลาว่างของคุณ</p>
+        </div>
+      </div>
+      <ol className="mt-4 grid gap-2.5 sm:grid-cols-3">
+        {steps.map((step) => (
+          <li key={step.n} className="flex items-start gap-2.5 rounded-xl bg-surface p-3 ring-1 ring-line">
+            <span className="bg-brand grid h-6 w-6 shrink-0 place-items-center rounded-full text-xs font-bold text-white">{step.n}</span>
+            <span className="min-w-0">
+              <span className="block text-sm font-semibold">{step.title}</span>
+              <span className="block text-xs text-muted">{step.detail}</span>
+            </span>
+          </li>
+        ))}
+      </ol>
     </div>
   );
 }
